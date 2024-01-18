@@ -1,0 +1,277 @@
+## Beta-diversity analysis
+# Fig S2 and Table S2
+
+#install packages
+library(tidyverse)
+library(phyloseq)
+library(reshape2)
+library(grid)
+library(Biostrings)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(DESeq2)
+library(vegan)
+
+#load cleaned phyloseq objects
+load('phyloseq_bact_clean')
+psbact_clean
+
+load('phyloseq_ITS_clean')
+psITS_clean
+
+#load metadata file
+metadata <- read.table("ANTIBIO_metadata_seqinfo.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+
+row.names(metadata) <- as.character(metadata$Manifest)
+metadata$Manifest <- NULL
+dim(metadata)
+
+##BACTERIA
+# remove samples with no assigned bacterial reads
+psbact2 = subset_samples(psbact_clean, BactAssigned %in% c("Yes"))
+psbact2
+
+#trim metadata to reflect same removal
+metadatabact = subset(metadata, BactAssigned %in% c("Yes"))
+metadatabact
+
+#confirm how tax and asv tables look
+taxa_test <- as.data.frame(tax_table(psbact2))
+taxa_test
+asv_test <- as.data.frame(otu_table(psbact2))
+asv_test
+
+# Create function geo means for Variance Stabilizing Transformation
+# Stabilize variants based on variants (based on sample size)
+diagdds = phyloseq_to_deseq2(psbact2, ~ Study_Arm)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+
+diagdds = estimateSizeFactors(diagdds, geoMeans = apply(counts(diagdds), 1, gm_mean))
+
+vst.blind <- DESeq2::varianceStabilizingTransformation(diagdds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+
+# Computing Bray-Curtis Dissimilarities and PCoA
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+PCoA.comm.vst.blind.Mat<-capscale(comm.vst.blind.Mat~1,distance="bray")
+PCoA.comm.vst.blind.Mat$CA$eig[1:3]/sum(PCoA.comm.vst.blind.Mat$CA$eig)
+
+row.names(metadatabact)==row.names(scores(PCoA.comm.vst.blind.Mat)$sites)
+
+#Add PCoA values to metadata file for plotting
+metadatabact$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
+metadatabact$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
+
+#PCoA with ggplot2 - facet on study_Arm
+test <- qplot(metadatabact$PCoA1, metadatabact$PCoA2, xlab="PCoA1",ylab="PCoA2", #edit axes label here
+              size=0.5, shape=Time_point, fill=Time_point, color=Time_point, data=(metadatabact))
+test + facet_wrap(~Study_Arm) +
+  stat_ellipse(level=0.95, geom = "polygon", alpha = 1/6, linetype = 2, size=0.5, aes(fill = Time_point,color=Time_point))+
+  scale_shape_manual(name="Time_point",values=c(21,22,23,24))+ #shape selection
+  theme_bw() + theme(legend.title = element_text(colour="black", size=18, face="bold"),
+                     legend.text = element_text(colour="black", size = 18),
+                     axis.title=element_text(face="bold",size="18", color="black"),
+                     legend.position="right",
+                     plot.title=element_text(face="bold",size=18))+
+  scale_color_manual(name="Time_point",values=c("black","black"))+ #outer shape color
+  scale_fill_manual(name="Time_point",values=c("#FF99FF","#990066"))+ #inside shape color
+  guides(size=FALSE) # To hide legend, add this inside parenthesis: color=FALSE, fill=FALSE,shape=FALSE
+
+#inspect PERMANOVA results
+# note: run for all variables together only in a way to obtain idea...but should run them individually
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Study_Arm + Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx, data=metadatabact, permutations = 999)
+permanova$aov.tab
+
+# PERMANOVA total dataframe
+#run for each variable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Birth_weight, data=metadatabact, permutations = 999)
+permanova$aov.tab
+
+#run for variables together that can influence each other
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Study_Arm*Time_point , data=metadatabact, permutations = 999)
+permanova$aov.tab
+
+#Permanova per study arms
+
+#working on physeq_bact subsets
+psshort = subset_samples(psbact2, Study_Arm %in% c("1_Short_Term"))
+psshort
+metadatabactshort = subset(metadatabact, Study_Arm %in% c("1_Short_Term"))
+metadatabactshort
+
+pslong = subset_samples(psbact2, Study_Arm %in% c("2_Long_Term"))
+pslong
+metadatabactlong = subset(metadatabact, Study_Arm %in% c("2_Long_Term"))
+metadatabactlong
+
+#working on ps subsets
+#short term
+test.phyloseq.dds<-phyloseq_to_deseq2(psshort,~Time_point)
+test.phyloseq.dds = estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx, data=metadatabactshort, permutations = 999)
+permanova$aov.tab
+
+#repeat analysis for each variable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Time_point, data=metadatabactshort, permutations = 999)
+permanova$aov.tab
+
+# long term
+diagdds = phyloseq_to_deseq2(pslong, ~ Time_point)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+diagdds = estimateSizeFactors(diagdds, geoMeans = apply(counts(diagdds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(diagdds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx, data=metadatabactlong, permutations = 999)
+permanova$aov.tab
+
+#repeat analysis for each variable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Total_days_Abx, data=metadatabactlong, permutations = 999)
+permanova$aov.tab
+
+
+
+##FUNGI
+#subset ps object over 1k sequences
+psITS1k = subset_samples(psITS_clean, Over_1000 %in% c("Yes"))
+psITS1k
+
+#subset metadata to reflect same trimming 
+dataset1k = subset(metadata, Over_1000 %in% c("Yes"))
+dataset1k
+
+# Create function geo means for Variance Stabilizing Transformation
+# Stabilize variants based on variants (based on sample size)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+
+# Variance Stabilizing Transformation
+test.phyloseq.dds<-phyloseq_to_deseq2(psITS1k,~Study_Arm)
+
+## converting counts to integer mode
+test.phyloseq.dds = estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+
+# Computing Bray-Curtis Dissimilarities and PCoA
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+PCoA.comm.vst.blind.Mat<-capscale(comm.vst.blind.Mat~1,distance="bray")
+PCoA.comm.vst.blind.Mat$CA$eig[1:3]/sum(PCoA.comm.vst.blind.Mat$CA$eig)
+
+row.names(dataset1k)==row.names(scores(PCoA.comm.vst.blind.Mat)$sites)
+
+#Add PCoA values to metadata file for plotting
+dataset1k$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
+dataset1k$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
+dataset1k #check if correctly added
+
+#PCoA with ggplot2 per Study_Arm
+test <- qplot(dataset1k$PCoA1, dataset1k$PCoA2, xlab="PCoA1",ylab="PCoA2", #edit axes label here
+              size=0.5, shape=Time_point, fill=Time_point, color=Time_point, data=(dataset1k))
+test + facet_wrap(~Study_Arm) +
+  stat_ellipse(level=0.95, geom = "polygon", alpha = 1/6, linetype = 2, size=0.5, aes(fill = Time_point,color=Time_point))+
+  scale_shape_manual(name="Time_point",values=c(21,22,23,24))+ #shape selection
+  theme_bw() + theme(legend.title = element_text(colour="black", size=18, face="bold"),
+                     legend.text = element_text(colour="black", size = 18),
+                     axis.title=element_text(face="bold",size="18", color="black"),
+                     legend.position="right",
+                     plot.title=element_text(face="bold",size=18))+
+  scale_color_manual(name="Time_point",values=c("black","black"))+ #outer shape color
+  scale_fill_manual(name="Time_point",values=c("#66CCCC","#006666"))+ #inside shape color
+  guides(size=FALSE) # To hide legend, add this inside parenthesis: color=FALSE, fill=FALSE,shape=FALSE
+
+# PERMANOVA total dataframe
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Study_Arm + Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx  , data=dataset1k, permutations = 999)
+permanova$aov.tab
+
+#repeat for each variable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Total_days_Abx , data=dataset1k, permutations = 999)
+permanova$aov.tab
+
+# run for variables together that can influence each other
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Birth_weight*Total_days_Abx  , data=dataset1k, permutations = 999)
+permanova$aov.tab
+
+#Permanova per study arm
+
+#Short term
+ps1kshort = subset_samples(psITS1k, Study_Arm %in% c("1_Short_Term"))
+ps1kshort
+dataset1kshort = subset(dataset1k, Study_Arm %in% c("1_Short_Term"))
+dataset1kshort
+
+test.phyloseq.dds<-phyloseq_to_deseq2(ps1kshort,~Time_point)
+test.phyloseq.dds = estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx  , data=dataset1kshort, permutations = 999)
+permanova$aov.tab
+
+#repeat for each variable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Total_days_Abx  , data=dataset1kshort, permutations = 999)
+permanova$aov.tab
+
+#Long term
+ps1klong = subset_samples(psITS1k, Study_Arm %in% c("2_Long_Term"))
+ps1klong
+dataset1klong = subset(dataset1k, Study_Arm %in% c("2_Long_Term"))
+dataset1klong
+
+test.phyloseq.dds<-phyloseq_to_deseq2(ps1klong,~Time_point)
+test.phyloseq.dds = estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Time_point + Sex + Age_days + Pets + Birth_weight + Total_days_Abx  , data=dataset1klong, permutations = 999)
+permanova$aov.tab
+
+#repeat for eachvariable of interest
+set.seed(1)
+permanova<-adonis(comm.vst.blind.Mat ~ Total_days_Abx  , data=dataset1klong, permutations = 999)
+permanova$aov.tab
+
+
+
+
+
