@@ -1,0 +1,444 @@
+##Random Forest and Logistic Mixed Regression models
+# Fig 1 and S8 
+
+#Load packages
+library(phyloseq)
+library(tidyverse)
+library(randomForest)
+library(caret)
+
+# Create Malassezia trend variable
+#load ps object
+load("phyloseq_ITS_clean")
+
+# remove samples with less than 1000 reads
+ps1k = subset_samples(psITS_clean, Over_1000 %in% c("Yes"))
+ps1k
+
+#glom at genus level and relativize
+ps_melt <- ps1k %>%
+  tax_glom(taxrank = "Genus") %>%
+  transform_sample_counts(function(x) x*100 / sum(x)) %>%
+  psmelt()
+
+#filter for Malassezia 
+ps_malassezia <- ps_melt %>%
+  filter(Genus == "g__Malassezia")
+
+#create wide format based on time point
+ps_malassezia_wide <- ps_malassezia %>%
+  spread(key = Time_point, value = Abundance, fill = "NA")
+
+#make a new data frames with only the abundance values at each time point and merge based on participant 
+a <- ps_malassezia_wide %>%
+  filter(Day_0 != "NA") %>%
+  dplyr::select(Patient_ID, Day_0)
+b <- ps_malassezia_wide %>%
+  filter(Follow_Up != "NA") %>%
+  dplyr::select(Patient_ID, Follow_Up)
+m <- merge(a, b, by = c("Patient_ID"), all.x=TRUE)
+
+#create malassezia trend variable
+m$Day_0 <- as.numeric(m$Day_0)
+m$Follow_Up <- as.numeric(m$Follow_Up)
+m_trend <- m %>%
+  dplyr::mutate(Malassezia_dif = Follow_Up - Day_0)
+
+m_trend$Malassezia_trend <- NA
+m_trend$Malassezia_trend[m_trend$Malassezia_dif <= 0] <-"No expansion"
+m_trend$Malassezia_trend[m_trend$Malassezia_dif > 0] <-"Expansion"
+#m_trend$Malassezia_trend[m_trend$Malassezia_dif == 0] <-"Unchanged"
+
+#load metadata
+sample_data <- read.table("ANTIBIO_metadata_seqinfo.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+
+row.names(sample_data) <- as.character(sample_data$Manifest)
+sample_data$Manifest <- NULL
+dim(sample_data)
+
+#select for Time_Point Day_0 to remove duplicates and merge with m_trend
+sdf <- sample_data %>%
+  filter(Time_point == "Follow_Up")
+
+#merge sdf with m_trend
+sdf2 <- merge(sdf, m_trend, by = c("Patient_ID"), all.x=TRUE)
+
+#Check distribution of Malassezia trend status
+sdf2 %>% group_by(Malassezia_trend) %>% tally()
+
+# Prepare data for random forest analysis
+#Remove participants with NA Malassezia trend 
+sdf2 <- sdf2 %>% 
+  filter(Malassezia_trend != "NA")
+
+#Mutate Current_feeding to only 2 categories 
+sdf2 <- sdf2 %>%
+  mutate(Current_feeding = dplyr::recode(Current_feeding,
+                          "Breast_Milk" = "Exlusive/partial BF",
+                          "Both" = "Exlusive/partial BF",
+                          "Formula" = "Formula"))
+
+#Choose the level of our binomial covariates that we want to set as baseline
+set as baseline the opposite as you would predict - Reference level
+
+sdf2$Malassezia_trend <- as.factor(sdf2$Malassezia_trend)
+sdf2$Malassezia_trend <- relevel(sdf2$Malassezia_trend, ref = "No expansion")
+
+# clinical and poppulational variables
+sdf2$Delivery_method <- as.factor(sdf2$Delivery_method)
+sdf2$Delivery_method <- relevel(sdf2$Delivery_method, ref = "Vaginal")
+
+sdf2$Sex <- as.factor(sdf2$Sex)
+sdf2$Sex <- relevel(sdf2$Sex, ref = "M")
+
+sdf2$Abx_previous <- as.factor(sdf2$Abx_previous)
+sdf2$Abx_previous <- relevel(sdf2$Abx_previous, ref = "No")
+
+sdf2$Study_Arm <- as.factor(sdf2$Study_Arm)
+sdf2$Study_Arm <- relevel(sdf2$Study_Arm, ref = "1_Short_Term")
+
+sdf2$Current_feeding <- as.factor(sdf2$Current_feeding)
+sdf2$Current_feeding <- relevel(sdf2$Current_feeding, ref = "Formula")
+
+sdf2$Bath_72h <- as.factor(sdf2$Bath_72h)
+sdf2$Bath_72h <- relevel(sdf2$Bath_72h, ref = "No")
+
+sdf2$Abx_previous <- as.factor(sdf2$Abx_previous)
+sdf2$Abx_previous <- relevel(sdf2$Abx_previous, ref = "No")
+
+sdf2$Pets <- as.factor(sdf2$Pets)
+sdf2$Pets <- relevel(sdf2$Pets, ref = "No")
+
+sdf2$Siblings <- as.factor(sdf2$Siblings)
+sdf2$Siblings <- relevel(sdf2$Siblings, ref = "No")
+
+sdf2$BM_1h <- as.factor(sdf2$BM_1h)
+sdf2$BM_1h <- relevel(sdf2$BM_1h, ref = "No")
+
+sdf2$Formula_1week <- as.factor(sdf2$Formula_1week)
+sdf2$Formula_1week <- relevel(sdf2$Formula_1week, ref = "Yes")
+
+sdf2$Pregnancy_complications <- as.factor(sdf2$Pregnancy_complications)
+sdf2$Pregnancy_complications <- relevel(sdf2$Pregnancy_complications, ref = "Yes")
+
+sdf2$PM_antibiotic <- as.factor(sdf2$PM_antibiotic)
+sdf2$PM_antibiotic <- relevel(sdf2$PM_antibiotic, ref = "Yes")
+
+sdf2$LM_antibiotics <- as.factor(sdf2$LM_antibiotics)
+sdf2$LM_antibiotics <- relevel(sdf2$LM_antibiotics, ref = "Yes")
+
+#antibiotic singles
+sdf2$Antibiotic_Gentamicin <- as.factor(sdf2$Antibiotic_Gentamicin)
+sdf2$Antibiotic_Gentamicin <- relevel(sdf2$Antibiotic_Gentamicin, ref = "No")
+
+sdf2$Antibiotic_Meropenem <- as.factor(sdf2$Antibiotic_Meropenem)
+sdf2$Antibiotic_Meropenem <- relevel(sdf2$Antibiotic_Meropenem, ref = "No")
+
+sdf2$Antibiotic_Cefazolin <- as.factor(sdf2$Antibiotic_Cefazolin)
+sdf2$Antibiotic_Cefazolin <- relevel(sdf2$Antibiotic_Cefazolin, ref = "No")
+
+sdf2$Antibiotic_Cefalexin <- as.factor(sdf2$Antibiotic_Cefalexin)
+sdf2$Antibiotic_Cefalexin <- relevel(sdf2$Antibiotic_Cefalexin, ref = "No")
+
+sdf2$Antibiotic_Cefixime <- as.factor(sdf2$Antibiotic_Cefixime)
+sdf2$Antibiotic_Cefixime <- relevel(sdf2$Antibiotic_Cefixime, ref = "No")
+
+sdf2$Antibiotic_Ceftriaxone <- as.factor(sdf2$Antibiotic_Ceftriaxone)
+sdf2$Antibiotic_Ceftriaxone <- relevel(sdf2$Antibiotic_Ceftriaxone, ref = "No")
+
+sdf2$Antibiotic_Cefotaxime <- as.factor(sdf2$Antibiotic_Cefotaxime)
+sdf2$Antibiotic_Cefotaxime <- relevel(sdf2$Antibiotic_Cefotaxime, ref = "No")
+
+sdf2$Antibiotic_Vancomycin <- as.factor(sdf2$Antibiotic_Vancomycin)
+sdf2$Antibiotic_Vancomycin <- relevel(sdf2$Antibiotic_Vancomycin, ref = "No")
+
+sdf2$Antibiotic_Clindamycin <- as.factor(sdf2$Antibiotic_Clindamycin)
+sdf2$Antibiotic_Clindamycin <- relevel(sdf2$Antibiotic_Clindamycin, ref = "No")
+
+sdf2$Antibiotic_Erythromycin <- as.factor(sdf2$Antibiotic_Erythromycin)
+sdf2$Antibiotic_Erythromycin <- relevel(sdf2$Antibiotic_Erythromycin, ref = "No")
+
+sdf2$Antibiotic_Penicillin <- as.factor(sdf2$Antibiotic_Penicillin)
+sdf2$Antibiotic_Penicillin <- relevel(sdf2$Antibiotic_Penicillin, ref = "No")
+
+sdf2$Antibiotic_Cloxacillin <- as.factor(sdf2$Antibiotic_Cloxacillin)
+sdf2$Antibiotic_Cloxacillin <- relevel(sdf2$Antibiotic_Cloxacillin, ref = "No")
+
+sdf2$Antibiotic_Ampicillin <- as.factor(sdf2$Antibiotic_Ampicillin)
+sdf2$Antibiotic_Ampicillin <- relevel(sdf2$Antibiotic_Ampicillin, ref = "No")
+
+sdf2$Antibiotic_Amoxicillin <- as.factor(sdf2$Antibiotic_Amoxicillin)
+sdf2$Antibiotic_Amoxicillin <- relevel(sdf2$Antibiotic_Amoxicillin, ref = "No")
+
+sdf2$Antibiotic_Ceftriaxone <- as.factor(sdf2$Antibiotic_Ceftriaxone)
+sdf2$Antibiotic_Ceftriaxone <- relevel(sdf2$Antibiotic_Ceftriaxone, ref = "No")
+
+sdf2$Antibiotic_Cefotaxime <- as.factor(sdf2$Antibiotic_Cefotaxime)
+sdf2$Antibiotic_Cefotaxime <- relevel(sdf2$Antibiotic_Cefotaxime, ref = "No")
+
+sdf2$Antibiotic_Augmentin <- as.factor(sdf2$Antibiotic_Augmentin)
+sdf2$Antibiotic_Augmentin <- relevel(sdf2$Antibiotic_Augmentin, ref = "No")
+
+sdf2$Antibiotic_Nitrofurantoin <- as.factor(sdf2$Antibiotic_Nitrofurantoin)
+sdf2$Antibiotic_Nitrofurantoin <- relevel(sdf2$Antibiotic_Nitrofurantoin, ref = "No")
+
+# antibiotics class
+sdf2$Antibiotic2_Aminoglicosides <- as.factor(sdf2$Antibiotic2_Aminoglicosides)
+sdf2$Antibiotic2_Aminoglicosides <- relevel(sdf2$Antibiotic2_Aminoglicosides, ref = "No")
+
+sdf2$Antibiotic2_Carbapenems <- as.factor(sdf2$Antibiotic2_Carbapenems)
+sdf2$Antibiotic2_Carbapenems <- relevel(sdf2$Antibiotic2_Carbapenems, ref = "No")
+
+sdf2$Antibiotic2_Cephalosporins <- as.factor(sdf2$Antibiotic2_Cephalosporins)
+sdf2$Antibiotic2_Cephalosporins <- relevel(sdf2$Antibiotic2_Cephalosporins, ref = "No")
+
+sdf2$Antibiotic2_Glycopeptide <- as.factor(sdf2$Antibiotic2_Glycopeptide)
+sdf2$Antibiotic2_Glycopeptide <- relevel(sdf2$Antibiotic2_Glycopeptide, ref = "No")
+
+sdf2$Antibiotic2_Lincosamide <- as.factor(sdf2$Antibiotic2_Lincosamide)
+sdf2$Antibiotic2_Lincosamide <- relevel(sdf2$Antibiotic2_Lincosamide, ref = "No")
+
+sdf2$Antibiotic2_Macrolides <- as.factor(sdf2$Antibiotic2_Macrolides)
+sdf2$Antibiotic2_Macrolides <- relevel(sdf2$Antibiotic2_Macrolides, ref = "No")
+
+sdf2$Antibiotic2_Nitrofurans <- as.factor(sdf2$Antibiotic2_Nitrofurans)
+sdf2$Antibiotic2_Nitrofurans <- relevel(sdf2$Antibiotic2_Nitrofurans, ref = "No")
+
+sdf2$Antibiotic2_Penicillins <- as.factor(sdf2$Antibiotic2_Penicillins)
+sdf2$Antibiotic2_Penicillins <- relevel(sdf2$Antibiotic2_Penicillins, ref = "No")
+
+# antibiotics class #2
+sdf2$Antibiotic3_Aminoglicosides <- as.factor(sdf2$Antibiotic3_Aminoglicosides)
+sdf2$Antibiotic3_Aminoglicosides <- relevel(sdf2$Antibiotic3_Aminoglicosides, ref = "No")
+
+sdf2$Antibiotic3_Carbapenems <- as.factor(sdf2$Antibiotic3_Carbapenems)
+sdf2$Antibiotic3_Carbapenems <- relevel(sdf2$Antibiotic3_Carbapenems, ref = "No")
+
+sdf2$Antibiotic3_Cephalosporins1stgeneration <- as.factor(sdf2$Antibiotic3_Cephalosporins1stgeneration)
+sdf2$Antibiotic3_Cephalosporins1stgeneration <- relevel(sdf2$Antibiotic3_Cephalosporins1stgeneration, ref = "No")
+
+sdf2$Antibiotic3_Cephalosporins3stgeneration <- as.factor(sdf2$Antibiotic3_Cephalosporins3stgeneration)
+sdf2$Antibiotic3_Cephalosporins3stgeneration <- relevel(sdf2$Antibiotic3_Cephalosporins3stgeneration, ref = "No")
+
+sdf2$Antibiotic3_Penicillins3stgeneration <- as.factor(sdf2$Antibiotic3_Penicillins3stgeneration)
+sdf2$Antibiotic3_Penicillins3stgeneration <- relevel(sdf2$Antibiotic3_Penicillins3stgeneration, ref = "No")
+
+sdf2$Antibiotic3_Glycopeptide <- as.factor(sdf2$Antibiotic3_Glycopeptide)
+sdf2$Antibiotic3_Glycopeptide <- relevel(sdf2$Antibiotic3_Glycopeptide, ref = "No")
+
+sdf2$Antibiotic3_Lincosamide <- as.factor(sdf2$Antibiotic3_Lincosamide)
+sdf2$Antibiotic3_Lincosamide <- relevel(sdf2$Antibiotic3_Lincosamide, ref = "No")
+
+sdf2$Antibiotic3_Macrolides <- as.factor(sdf2$Antibiotic3_Macrolides)
+sdf2$Antibiotic3_Macrolides <- relevel(sdf2$Antibiotic3_Macrolides, ref = "No")
+
+sdf2$Antibiotic3_Nitrofurans <- as.factor(sdf2$Antibiotic3_Nitrofurans)
+sdf2$Antibiotic3_Nitrofurans <- relevel(sdf2$Antibiotic3_Nitrofurans, ref = "No")
+
+sdf2$Antibiotic3_Penicillins1stgeneration <- as.factor(sdf2$Antibiotic3_Penicillins1stgeneration)
+sdf2$Antibiotic3_Penicillins1stgeneration <- relevel(sdf2$Antibiotic3_Penicillins1stgeneration, ref = "No")
+
+sdf2$Antibiotic3_Penicillins2stgeneration <- as.factor(sdf2$Antibiotic3_Penicillins2stgeneration)
+sdf2$Antibiotic3_Penicillins2stgeneration <- relevel(sdf2$Antibiotic3_Penicillins2stgeneration, ref = "No")
+
+sdf2$Antibiotic3_Penicillins3stgeneration <- as.factor(sdf2$Antibiotic3_Penicillins3stgeneration)
+sdf2$Antibiotic3_Penicillins3stgeneration <- relevel(sdf2$Antibiotic3_Penicillins3stgeneration, ref = "No")
+
+#Note: not needed for continuous variables: Total_days_Abx, Birth_weight, Age_days, Antibiotics_total, Antibiotics_ER_number, Heart_rate, Pregnancy_duration
+
+
+## Random forest
+#First Random forest will include all variables - for inspection only, see what is popping up to then decide how to proceed
+x <- sdf2[, c("Malassezia_trend", "Study_Arm", "Sex", "Age_days", "Delivery_method", "Birth_weight", "BM_1h", "Formula_1week", "Current_feeding", "Bath_72h", "Abx_previous", "Pets", "Siblings", "Heart_rate", "Antibiotics_ER_number", "Antibiotics_total", "Antibiotic_Gentamicin", "Antibiotic_Meropenem", "Antibiotic_Cefazolin", "Antibiotic_Cefalexin", "Antibiotic_Cefixime", "Antibiotic_Ceftriaxone", "Antibiotic_Cefotaxime", "Antibiotic_Vancomycin", "Antibiotic_Clindamycin", "Antibiotic_Erythromycin", "Antibiotic_Nitrofurantoin", "Antibiotic_Penicillin", "Antibiotic_Ampicillin", "Antibiotic_Amoxicillin", "Antibiotic_Augmentin", "Antibiotic2_Aminoglicosides", "Antibiotic2_Carbapenems", "Antibiotic2_Cephalosporins", "Antibiotic2_Glycopeptide", "Antibiotic2_Lincosamide", "Antibiotic2_Macrolides", "Antibiotic2_Nitrofurans", "Antibiotic2_Penicillins", "Antibiotic3_Aminoglicosides", "Antibiotic3_Carbapenems", "Antibiotic3_Cephalosporins1stgeneration", "Antibiotic3_Cephalosporins3stgeneration", "Antibiotic3_Glycopeptide", "Antibiotic3_Lincosamide", "Antibiotic3_Macrolides", "Antibiotic3_Nitrofurans", "Antibiotic3_Penicillins1stgeneration", "Antibiotic3_Penicillins2stgeneration", "Antibiotic3_Penicillins3stgeneration", "Total_days_Abx", "Pregnancy_duration", "Pregnancy_complications", "PM_antibiotic", "LM_antibiotics")]
+
+#Consider whether the variables are evenly distributed 
+x %>%
+  group_by(Malassezia_trend, Sex) %>% #replace with variable of interest
+  dplyr::summarise(
+    n = n())
+
+#Set seed for reproducible results
+set.seed(151) 
+
+#Train dataset for random forest
+fit_control <- trainControl(method = "cv", number = 10 )
+
+#Generate random forest to determine factors that are most predictive/strongly associated with Malassezia pattern
+RF_state_classify <- randomForest(Malassezia_trend ~ . , data=x, importance=TRUE, proximity=TRUE, nperm=1000, ntree=500, trControl=fit_control)
+RF_state_classify
+
+#Determine feature importance and sort by mean decreasing Gini index
+RF_state_classify_imp <- as.data.frame(RF_state_classify$importance)
+RF_state_classify_imp$features <- rownames(RF_state_classify_imp)
+RF_state_classify_imp_sorted <- arrange(RF_state_classify_imp  , desc(MeanDecreaseGini))
+m <- as.data.frame(as.matrix(RF_state_classify_imp_sorted))
+
+#Create rounding function for rounding numeric values in dataframe
+round_df <- function(x, digits) {
+  numeric_columns <- sapply(x, mode) == 'numeric'
+  x[numeric_columns] <-  round(x[numeric_columns], digits)
+  x
+}
+
+#Round mean decreasing Gini index
+m$MeanDecreaseGini <- as.numeric(m$MeanDecreaseGini)
+m <- round_df(m, 2)
+
+#Assign features to categories for colour coding figure
+m1 <- m %>% mutate(Factor = case_when(features %in% c("Sex", "Current_feeding", "Bath_72h", "Age_days", "Birth_weight", "BM_1h", "Formula_1week", "Heart_rate") ~ "Child", 
+                                      features %in% c("Delivery_method", "Birth_weight", "Pregnancy_duration", "Pregnancy_complications", "PM_antibiotic", "LM_antibiotics") ~  "Pregnancy and Delivery", 
+                                      features %in% c("Pets", "Siblings") ~ "Household", 
+                                      features %in% c("Abx_previous", "Study_Arm", "Total_days_Abx", "Antibiotics_total", "Antibiotics_ER_number", "Antibiotic_Gentamicin", "Antibiotic_Meropenem", "Antibiotic_Cefazolin", "Antibiotic_Cefalexin", "Antibiotic_Cefixime", "Antibiotic_Ceftriaxone", "Antibiotic_Cefotaxime", "Antibiotic_Vancomycin", "Antibiotic_Clindamycin", "Antibiotic_Erythromycin", "Antibiotic_Nitrofurantoin", "Antibiotic_Penicillin", "Antibiotic_Ampicillin", "Antibiotic_Amoxicillin", "Antibiotic_Augmentin", "Antibiotic2_Aminoglicosides", "Antibiotic2_Carbapenems", "Antibiotic2_Cephalosporins", "Antibiotic2_Glycopeptide", "Antibiotic2_Lincosamide", "Antibiotic2_Macrolides", "Antibiotic2_Nitrofurans", "Antibiotic2_Penicillins", "Antibiotic3_Aminoglicosides", "Antibiotic3_Carbapenems", "Antibiotic3_Cephalosporins1stgeneration", "Antibiotic3_Cephalosporins3stgeneration", "Antibiotic3_Glycopeptide", "Antibiotic3_Lincosamide", "Antibiotic3_Macrolides", "Antibiotic3_Nitrofurans", "Antibiotic3_Penicillins1stgeneration", "Antibiotic3_Penicillins2stgeneration", "Antibiotic3_Penicillins3stgeneration") ~ "Antibtiotic Treatment"))
+
+#Plot random forest results by mean decreasing Gini index
+random_forest_fig <- ggplot(m1, aes(reorder(features, MeanDecreaseGini), MeanDecreaseGini, fill=Factor))+ 
+  geom_bar(stat="identity",  color = "black", width=0.6)+
+  labs(colour = NULL)+ labs(x="", y ="Mean Decreasing Gini Index")+
+  coord_flip()+
+  scale_fill_manual(values=c("#46327e", "#277f8e", "#4ac16d","#d0e11c"), name = "Factor")+
+  theme_bw()+
+  ggtitle("Predictors of Malassezia Abundance Trend")+
+  theme(plot.title = element_text(size=10, hjust = 0.5, face = "bold"),
+        panel.background = element_blank(),
+        axis.title=element_text(face = "bold", size = 10),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 9), 
+        legend.text = element_text(size = 9),
+        legend.text.align = 0)
+random_forest_fig
+
+#Things to consider: many Abx variables are highly unbalanced... how reasonable it to include Abx where only 1 infant had that antibiotic 
+
+#Check accuracy of the random forest
+library(pROC)
+RF_state_classify_roc <- roc(x$Malassezia_trend,RF_state_classify$votes[,2])
+plot(RF_state_classify_roc) # a curve closer to the top left corner indicates good performance, while a baseline random classifier will give points along the diagonal
+auc(RF_state_classify_roc) # values closer to 1 are more accurate
+
+# Random forest v2 - now selecting only some variables of interest
+#Create new dataframe only containing covariates to be used in subsequent analyses
+x <- sdf2[, c("Malassezia_trend", "Abx_previous", "Antibiotics_total", "Antibiotics_ER_number", "Total_days_Abx", "Age_days", "Birth_weight", "Sex", "Pregnancy_duration", "LM_antibiotics", "PM_antibiotic")]
+
+#Consider whether the variables are evenly distributed 
+x %>%
+  group_by(Malassezia_trend, Abx_previous) %>%
+  dplyr::summarise(
+    n = n())
+
+#Set seed for reproducible results
+set.seed(151) 
+
+#Train dataset for random forest
+fit_control <- trainControl(method = "cv", number = 10 )
+
+#Generate random forest to determine factors that are most predictive/strongly associated with Malassezia pattern
+RF_state_classify <- randomForest(Malassezia_trend ~ . , data=x, importance=TRUE, proximity=TRUE, nperm=1000, ntree=500, trControl=fit_control)
+RF_state_classify
+
+#Determine feature importance and sort by mean decreasing Gini index
+RF_state_classify_imp <- as.data.frame(RF_state_classify$importance)
+RF_state_classify_imp$features <- rownames(RF_state_classify_imp)
+RF_state_classify_imp_sorted <- arrange(RF_state_classify_imp  , desc(MeanDecreaseGini))
+m <- as.data.frame(as.matrix(RF_state_classify_imp_sorted))
+
+#Create rounding function for rounding numeric values in dataframe
+round_df <- function(x, digits) {
+  numeric_columns <- sapply(x, mode) == 'numeric'
+  x[numeric_columns] <-  round(x[numeric_columns], digits)
+  x
+}
+
+#Round mean decreasing Gini index
+m$MeanDecreaseGini <- as.numeric(m$MeanDecreaseGini)
+m <- round_df(m, 2)
+
+#Assign features to categories for colour coding figure
+m1 <- m %>% mutate(Factor = case_when(features %in% c("Age_days", "Sex") ~ "Child", features %in% c("Birth_weight", "Pregnancy_duration") ~ "Pregnancy and Delivery", features %in% c("Abx_previous", "Total_days_Abx", "Antibiotics_total", "Antibiotics_ER_number", "Abx_previous", "LM_antibiotics", "PM_antibiotic") ~ "Antibiotic Treatment"))
+
+#Plot random forest results by mean decreasing Gini index (Figure 2A)
+random_forest_fig <- ggplot(m1, aes(reorder(features, MeanDecreaseGini), MeanDecreaseGini, fill=Factor))+ 
+  geom_bar(stat="identity",  color = "black", width=0.6)+
+  labs(colour = NULL)+ labs(x="", y ="Mean Decreasing Gini Index")+
+  coord_flip()+
+  scale_fill_manual(values=c("#46327e", "#277f8e","#d0e11c"), name = "Factor")+
+  theme_bw()+
+  ggtitle("Predictors of Malassezia Abundance Trend")+
+  theme(plot.title = element_text(size=10, hjust = 0.5, face = "bold"),
+        panel.background = element_blank(),
+        axis.title=element_text(face = "bold", size = 10),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 9), 
+        legend.text = element_text(size = 9),
+        legend.text.align = 0)
+random_forest_fig
+
+#Check accuracy of the random forest
+RF_state_classify_roc <- roc(x$Malassezia_trend,RF_state_classify$votes[,2])
+plot(RF_state_classify_roc) # a curve closer to the top left corner indicates good performance, while a baseline random classifier will give points along the diagonal
+auc(RF_state_classify_roc) # values closer to 1 are more accurate
+
+## note: also played with other RF analysis including antibiotics, but study not powerful enought
+
+
+## Linear Mixed Model 
+(using change in Malassezia relative abundance - trendd and nubers)
+
+library(lme4)
+
+#LINEAR MIXED MODELS: lm - continuous measure
+#mixed_lm_Malassezia <- lm(Malassezia_dif ~ Age_days + Birth_weight + Sex + Total_days_Abx + Pregnancy_duration + Antibiotics_total + Antibiotics_ER_number + LM_antibiotics + PM_antibiotic + Abx_previous, data = sdf2)
+mixed_lm_Malassezia <- lm(Malassezia_dif ~ Age_days + Birth_weight + Total_days_Abx + Antibiotics_total, data = sdf2)
+print(summary(mixed_lm_Malassezia), correlation=TRUE) #lmer for random effect - lm linear mixed if not
+#check_collinearity(mixed_lm_Malassezia)
+#check_model(mixed_lm_Malassezia)
+plot(mixed_lm_Malassezia)
+shapiro.test(residuals(mixed_lm_Malassezia))
+
+#LOGISTIC REGRESSION: glm - binary outcome
+#mixed_glm_Malassezia <- glm(Malassezia_trend ~ Age_days + Birth_weight + Sex + Total_days_Abx + Pregnancy_duration + Antibiotics_total + Antibiotics_ER_number + LM_antibiotics + PM_antibiotic + Abx_previous, data = sdf2, family = "binomial")
+mixed_glm_Malassezia <- glm(Malassezia_trend ~ Age_days + Birth_weight + Total_days_Abx + Antibiotics_total + Pregnancy_duration, data = sdf2, family = "binomial")
+print(summary(mixed_glm_Malassezia), correlation=TRUE)
+plot(mixed_glm_Malassezia)
+shapiro.test(residuals(mixed_glm_Malassezia))
+
+#Modify results in Excel because it's easier haha
+mal_diff_ci <- as.data.frame(confint(mixed_glm_Malassezia))
+write.csv(mal_diff_ci, "mal_diff_ci.csv")
+
+mal_diff_co <- coef(mixed_glm_Malassezia)
+write.csv(mal_diff_co, "mal_diff_co.csv")
+
+mal_diff_ci <- read.csv("mal_diff_ci2.csv")
+
+mal_diff_ci$stars <- cut(mal_diff_ci$p.value, breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf), label=c("***", "**", "*", "~", ""))
+
+mal_diff_ci$Element <- factor(mal_diff_ci$Element, levels = c("Antibiotics_total", "Pregnancy_duration", "Total_days_Abx" , "Birth_weight" , "Age_days"))
+
+#Assign features to categories for colour coding figure
+mal_diff_ci1 <- mal_diff_ci %>% mutate(Factor = case_when(Element %in% c("Age_days") ~ "Child", Element %in% c("Birth_weight", "Pregnancy_duration") ~ "Pregnancy and Delivery", Element %in% c("Total_days_Abx", "Antibiotics_total") ~ "Antibiotic Treatment"))
+
+
+#Malassezia abundance trend logistic regression plot.
+fig <- ggplot(mal_diff_ci1, aes(x=Element, y=OR, ymin=Lower, ymax=Upper, color = Factor))+
+  geom_pointrange(position = position_dodge(width = 1))+
+  geom_hline(yintercept = 0, linetype=5)+
+  coord_flip()+
+  xlab('')+
+  #scale_y_continuous(trans='log10',
+                     #breaks=trans_breaks('log10', function(x) 10^x),
+                     #labels=trans_format('log10', math_format(10^.x)))+
+  ggtitle("Malassezia_trend")+
+  ylab("OR (95% CI)")+
+  geom_errorbar(aes(ymin=Lower, ymax=Upper),width=0.2, position = position_dodge(width = 2))+
+  geom_text(aes(x = Element, y = OR, label=stars), color="black", size=8, hjust = 0.5, vjust = 0.1) + 
+  theme_bw()+
+  theme(plot.title = element_text(size=12, hjust = 0.5, face = "bold"),
+        panel.background = element_blank(),
+        axis.title=element_text(face = "bold", size = 11),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 10), 
+        legend.text = element_text(size = 10),
+        legend.text.align = 0) +
+  scale_color_manual(values=c("#46327e", "#277f8e", "#838f09"))
+fig
+
