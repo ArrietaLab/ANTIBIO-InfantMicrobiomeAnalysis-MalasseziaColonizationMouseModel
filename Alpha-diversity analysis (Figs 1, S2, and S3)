@@ -1,0 +1,394 @@
+## Alpha-diversity analysis
+# Figs 1, S2, and S3
+
+#install required packages
+library(phyloseq)
+library(ggplot2)
+library(ggforce)
+library(DESeq2)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(forcats)
+library(gridExtra)
+library(RColorBrewer)
+library(DT)
+
+#load cleaned phyloseq objects
+load('phyloseq_bact_clean')
+psbact_clean
+
+load('phyloseq_ITS_clean')
+psITS_clean
+
+#read metadata file
+metadata <- read.table("ANTIBIO_metadata_seqinfo.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+
+row.names(metadata) <- as.character(metadata$Manifest)
+metadata$Manifest <- NULL
+dim(metadata)
+
+##BACTERIA
+# remove samples with no assigned bacterial reads
+psbact2 = subset_samples(psbact_clean, BactAssigned %in% c("Yes"))
+psbact2
+
+#trim metadata to reflect same removal
+metadatabact = subset(metadata, BactAssigned %in% c("Yes"))
+metadatabact
+
+#Estimate values for alpha-diversity (Shannon), evenness (Shannon/log.Observed), and species richness (Chao1)
+adiv<-estimate_richness(psbact2,measures=c("Observed","Shannon","Chao1"))
+adiv
+ 
+#Inspect and add alpha diversity values to metadata
+metadatabact$alphadiv<-adiv$Shannon
+hist(metadatabact$alphadiv)
+
+metadatabact$chao1<-adiv$Chao1
+hist(metadatabact$chao1)
+
+metadatabact$evenness<-adiv$Shannon/log(adiv$Observed)
+hist(metadatabact$evenness)
+
+metadatabact$evenness<-adiv$Shannon/log(adiv$Observed)
+hist(metadatabact$evenness)
+
+metadatabact$observed<-adiv$Observed
+metadatabact$ObservedNorm<-adiv$Observed/(max(adiv$Observed))
+hist(metadatabact$ObservedNorm)
+
+#subsets dataset by Study Arm
+metadatashort = subset(metadatabact, Study_Arm %in% c("1_Short_Term"))
+metadatalong = subset(metadatabact, Study_Arm %in% c("2_Long_Term"))
+
+
+## plot Chao1 bacteria
+
+p <- ggplot(metadatabact, aes(Time_point, chao1,fill=Time_point, color=Time_point)) +
+  theme_bw()+ 
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("SPECIES RICHNESS (Chao1)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#FF99FF","#990066")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Chao1 whole dataset
+library(FSA)
+library(car)
+library(ggpubr)
+library(rstatix)
+
+metadatabact %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #not normal
+
+wilcox_test(chao1 ~ Time_point, data = metadatabact) #p=9.11e-06
+
+# plot Chao1 per Study_Arm
+metadatabact$facet = factor(metadatabact$Study_Arm, levels = c("1_Short_Term", "2_Long_Term"))
+
+p <- ggplot(metadatabact, aes(Time_point, chao1,fill=Time_point, color=Time_point)) +
+  theme_bw()+ facet_wrap(~facet) +
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("SPECIES RICHNESS (Chao1)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#FF99FF","#990066")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Chao1 Short_Term
+metadatashort %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #not normal
+
+wilcox_test(chao1 ~ Time_point, data = metadatashort) #p=0.00465
+
+# Stats Chao1 Long_Term
+metadatalong %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #normal
+
+t_test(chao1 ~ Time_point, data = metadatalong) #p=0.000176
+
+## plot Shannon bacteria
+
+p <- ggplot(metadatabact, aes(Time_point, alphadiv,fill=Time_point, color=Time_point)) +
+  theme_bw()+
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("ALPHA DIVERSITY (Shannon Index)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#FF99FF","#990066")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# there are five samples with only one ASV assigned, therefore shannon is 0
+# Save metadatabact asv file and manually replace 0 by NA
+write.csv(metadatabact, file = "metadatabact.csv")
+
+#reload no 0 metadatabact
+metadatabactno0 <- read.csv("metadatabactno0.csv",header=T,row.names=1)
+metadatabactno0
+
+#Stats Shannon whole dataset
+metadatabactno0 %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #not normal
+
+wilcox_test(alphadiv ~ Time_point, data = metadatabactno0) #p=0.00101
+
+# plot Shannon per Study_Arm
+p <- ggplot(metadatabact, aes(Time_point, alphadiv,fill=Time_point, color=Time_point)) +
+  theme_bw()+ facet_wrap(~facet) +
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("ALPHA DIVERSITY (Shannon Index)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#FF99FF","#990066")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Shannon Short_Term
+metabactno0short = subset(metadatabactno0, Study_Arm %in% c("1_Short_Term"))
+
+metabactno0short %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #normal
+
+t_test(alphadiv ~ Time_point, data = metabactno0short) #p=0.12
+
+# Stats Shannon Long_Term
+metabactno0long = subset(metadatabactno0, Study_Arm %in% c("2_Long_Term"))
+
+metabactno0long %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #normal
+
+t_test(alphadiv ~ Time_point, data = metabactno0long) #p=0.00254
+
+## Bacterial observed values per patient
+metadatabact %>% ggplot(aes(x=reorder(Patient_ID,-ObservedNorm),y=ObservedNorm,color=Time_point,label=Time_point, fill=Time_point)) + 
+  geom_point(alpha = 0.80)+ 
+  geom_line(aes(group = Patient_ID)) +
+  geom_label(size=2,color="White")+ 
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5,size=8),legend.text = element_text(size=8),legend.position = "bottom")+
+  xlab("Patient_ID") + facet_wrap(~Study_Arm)
+
+
+
+##FUNGI
+#subset ps object over 1k sequences (no chim per sample)
+psITS1k = subset_samples(psITS_clean, Over_1000 %in% c("Yes"))
+psITS1k
+
+#subset metadata
+dataset1k = subset(metadata, Over_1000 %in% c("Yes"))
+dataset1k
+
+#Estimate values for alpha-diversity (Shannon), evenness (Shannon/log.total), and species richness (Chao1)
+adivf<-estimate_richness(psITS1k,measures=c("Observed","Shannon","Chao1"))
+adivf
+
+# inspect and add values to metadata 
+dataset1k$alphadiv<-adivf$Shannon
+hist(dataset1k$alphadiv)
+
+dataset1k$chao1<-adivf$Chao1
+hist(dataset1k$chao1)
+
+dataset1k$evenness<-adivf$Shannon/log(adivf$Observed)
+hist(dataset1k$evenness)
+
+dataset1k$observed<-adivf$Observed
+dataset1k$ObservedNorm<-adivf$Observed/(max(adivf$Observed))
+hist(dataset1k$ObservedNorm)
+
+#subsets dataset by Study Arm
+dataset1kshort = subset(dataset1k, Study_Arm %in% c("1_Short_Term"))
+dataset1klong = subset(dataset1k, Study_Arm %in% c("2_Long_Term"))
+
+# plot Chao1 fungi
+p <- ggplot(dataset1k, aes(Time_point, chao1,fill=Time_point, color=Time_point)) +
+  theme_bw()+ 
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("SPECIES RICHNESS (Chao1)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#66CCCC","#006666")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Chao1 whole dataset
+dataset1k %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #not normal
+
+wilcox_test(chao1 ~ Time_point, data = metadatabactno0) #p=9.11e-06
+
+# plot Chao1 per Study_Arm
+dataset1k$facet = factor(dataset1k$Study_Arm, levels = c("1_Short_Term", "2_Long_Term"))
+
+p <- ggplot(dataset1k, aes(Time_point, chao1,fill=Time_point, color=Time_point)) +
+  theme_bw()+ facet_wrap(~facet) +
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("SPECIES RICHNESS (Chao1)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#66CCCC","#006666")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Chao1 Short_Term
+dataset1kshort %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #normal
+
+t_test(chao1 ~ Time_point, data = dataset1kshort) #p=0.00434
+
+# Stats Chao1 Long_Term
+dataset1klong %>%
+  group_by(Time_point) %>%
+  shapiro_test(chao1) #not normal
+
+wilcox_test(chao1 ~ Time_point, data = dataset1klong) #p=0.801
+
+# plot Shannon fungi
+p <- ggplot(dataset1k, aes(Time_point, alphadiv,fill=Time_point, color=Time_point)) +
+  theme_bw()+
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("ALPHA DIVERSITY (Shannon Index)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#66CCCC","#006666")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+#Stats Shannon whole dataset
+dataset1k %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #normal
+
+t_test(alphadiv ~ Time_point, data = dataset1k) #p=0.209
+
+# plot Shannon by Study_Arm
+p <- ggplot(dataset1k, aes(Time_point, alphadiv,fill=Time_point, color=Time_point)) +
+  theme_bw()+ facet_wrap(~facet) +
+  geom_boxplot(alpha=1)+geom_jitter(width=0.1) +
+  xlab("Time_point")+ylab("ALPHA DIVERSITY (Shannon Index)")+
+  theme(axis.text.x  = element_text(size=12, color="black"),
+        axis.text.y  = element_text(size=12, color="black"),
+        axis.title.x  = element_text(size=14, color="black",face="bold"),
+        axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(name="Time_point",values=c("#66CCCC","#006666")) +
+  scale_color_manual(name="Time_point",values=c("black","black")) +
+  #annotate("text", x = 4, y = 0.98, label = "***", size=12) +
+  guides(fill=F,color=F);p
+
+# Stats Shannon Short_Term
+dataset1kshort %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #normal
+
+t_test(alphadiv ~ Time_point, data = dataset1kshort) #p=0.0101
+
+# Stats Shannon Long_Term
+dataset1klong %>%
+  group_by(Time_point) %>%
+  shapiro_test(alphadiv) #normal
+
+t_test(alphadiv ~ Time_point, data = dataset1klong) #p=0.608
+
+## Fungi observed values per patient
+dataset1k %>% ggplot(aes(x=reorder(Patient_ID,-ObservedNorm),y=ObservedNorm,color=Time_point,label=Time_point, fill=Time_point)) + 
+  geom_point(alpha = 0.80)+ 
+  geom_line(aes(group = Patient_ID)) +
+  geom_label(size=2,color="White")+ 
+  theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 0.5,size=8),legend.text = element_text(size=8),legend.position = "bottom")+
+  xlab("Patient_ID") + 
+  facet_wrap(~Study_Arm)
+
+## Combined alpha diversity plots for bact + ITS
+#Note: only run next lines if running the code for the first time...otherwise keeps adding F to the table!
+
+metadatabact$seq<-"B"
+dataset1k$seq<-"F" 
+dataset1k$Patient_ID<-as.character(dataset1k$Patient_ID)
+dataset1k$Patient_ID[which(dataset1k$seq=="F")]<-paste0(dataset1k$Patient_ID[which(dataset1k$seq=="F")],"F")
+
+datasetcombined<- bind_rows(dataset1k,metadatabact,.id = "org")
+datasetcombined$cols<-paste0(datasetcombined$Time_point,"_",datasetcombined$seq)
+datasetcombined$Patient_ID<-factor(as.character(datasetcombined$Patient_ID),levels = unique(datasetcombined$Patient_ID[order(datasetcombined$Patient_ID)]))
+
+## Optional - Remove any samples which don't have both timepoints for this plot
+##tab<-table(datasetcombined$Study_Arm,datasetcombined$Patient_ID)
+##keep=names(which(tab["1_Short_Term",] !=1 & tab["2_Long_Term",]!=1))
+##print(keep)
+##datasetcombined<-datasetcombined %>% filter(Patient_ID %in% keep)
+
+al=0.002
+colors=c("#FF99FF", "#66CCCC","#990066", "#006666")
+
+datasetcombined   %>% filter(Study_Arm=="1_Short_Term") %>%ggplot(aes(x=Patient_ID,y=ObservedNorm),group=seq) + geom_point(alpha = 0.80,position = "dodge")+ geom_line(aes(group = Patient_ID)) +  theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, size=10),legend.text = element_text(size=15),legend.position = "bottom")+
+  geom_rect(mapping=aes(xmin=0.5, xmax=2.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al) +
+  geom_rect(mapping=aes(xmin=4.5, xmax=6.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=8.5, xmax=10.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=12.5, xmax=14.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=16.5, xmax=18.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=20.5, xmax=22.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=24.5, xmax=26.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=28.5, xmax=30.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=32.5, xmax=34.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=36.5, xmax=38.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=40.5, xmax=42.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  aes(group=rev(Time_point))+scale_colour_manual(values=colors)+scale_fill_manual(values=colors)+xlab("Patient_ID")+ ylab("Scaled Observed - Short Term") + geom_label(aes(label=seq, fill=cols,color=cols),size=5,color="White",position="dodge")+
+  ggtitle("Short_Term") +theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=20,face="bold"))
+
+datasetcombined   %>% filter(Study_Arm=="2_Long_Term") %>%ggplot(aes(x=Patient_ID,y=ObservedNorm),group=seq) + geom_point(alpha = 0.80,position = "dodge")+ geom_line(aes(group = Patient_ID)) +  theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 0.5,size=10),legend.text = element_text(size=15),legend.position = "bottom") +
+  geom_rect(mapping=aes(xmin=0.5, xmax=2.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al) +
+  geom_rect(mapping=aes(xmin=4.5, xmax=6.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=8.5, xmax=10.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=12.5, xmax=14.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=16.5, xmax=18.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=20.5, xmax=21.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=23.5, xmax=25.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=27.5, xmax=29.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=31.5, xmax=33.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=35.5, xmax=37.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=39.5, xmax=41.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=43.5, xmax=45.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  geom_rect(mapping=aes(xmin=47.5, xmax=49.5, ymin=-Inf, ymax=Inf), color="lightgray", alpha=al)+
+  aes(group=rev(Time_point))+scale_colour_manual(values=colors)+scale_fill_manual(values=colors)+xlab("Patient_ID")+ ylab("Scaled Observed - Long Term") + geom_label(aes(label=seq, fill=cols,color=cols),size=5,color="White")+
+  ggtitle( "Long_Term") + theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=20,face="bold"))
+
+
+
+
+
