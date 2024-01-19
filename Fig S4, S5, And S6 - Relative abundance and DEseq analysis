@@ -1,0 +1,935 @@
+## Relative abundance plots
+# Figs S4, S5, and S6
+
+#install required packages
+library(phyloseq)
+library(ggplot2)
+library(ggforce)
+library(DESeq2)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(forcats)
+library(gridExtra)
+library(RColorBrewer)
+library(DT)
+
+#load cleaned phyloseq objects
+load('phyloseq_bact_clean')
+psbact_clean
+
+load('phyloseq_ITS_clean')
+psITS_clean
+
+#read metadata file
+metadata <- read.table("ANTIBIO_metadata_seqinfo.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+
+row.names(metadata) <- as.character(metadata$Manifest)
+metadata$Manifest <- NULL
+dim(metadata)
+
+# remove samples with no assigned bacterial reads
+psbact2 = subset_samples(psbact_clean, BactAssigned %in% c("Yes"))
+psbact2
+
+#trim metadata to reflect same removal
+metadatabact = subset(metadata, BactAssigned %in% c("Yes"))
+metadatabact
+
+#subset fungi ps object over 1k sequences (no chim per sample)
+psITS1k = subset_samples(psITS_clean, Over_1000 %in% c("Yes"))
+psITS1k
+
+#subset fungal metadata to reflect same changes
+dataset1k = subset(metadata, Over_1000 %in% c("Yes"))
+dataset1k
+
+
+##Relative Abundance bacteria
+# Inspect taxa distribution in dataset - most abundant bacterial genera
+TopTaxa <- function(dataset, taxalevel, x) {
+  TaxaGlom  <- tax_glom(dataset, taxrank = taxalevel, NArm = FALSE)
+  #return(View(tax_table(TaxaGlom)))
+  #Percent   <- TaxaGlom
+  Percent   <- transform_sample_counts(TaxaGlom, function(x) 100 * x/sum(x))
+  #Percent   <- transform_sample_counts(TaxaGlom, log10)
+  #return(otu_table(Percent))
+  
+  #TaxaNames <- names(sort(taxa_sums(TaxaGlom), TRUE)[1:x])
+  TaxaNames <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+  
+  for (taxa in TaxaNames) {
+    phylaName    <- tax_table(Percent)[taxa, taxalevel]
+    phylaPercent <- otu_table(Percent)[taxa, ]
+    phylaVector  <- as.vector(phylaPercent)
+    
+    #phylaName    <- tax_table(TaxaGlom)[taxa, taxalevel]
+    #phylaPercent <- otu_table(TaxaGlom)[taxa, ]
+    #phylaVector  <- as.vector(log10(phylaPercent))
+    #phylaVector  <- phylaVector[!phylaVector %in% "-Inf"]
+    #return(phylaVector)
+    phylaMean    <- round(mean(phylaVector), 1)
+    phylaSD      <- round(sd(phylaVector), 1)
+    lowerCI      <- round(mean(phylaVector) - (1.96 * sd(phylaVector)), 2)
+    upperCI      <- round(mean(phylaVector) + (1.96 * sd(phylaVector)), 2)
+    
+    cat(sprintf("%s: ", phylaName))
+    cat(sprintf("%s ", phylaMean))
+    cat(sprintf("(%s)", phylaSD))
+    #   cat(sprintf("%s)", upperCI))
+    cat("%")
+    cat("\n")
+  }
+}
+
+TopTaxa(psbact2, "Genus", 20)
+
+#Normalize data
+psbact2ft <- transform_sample_counts(psbact2, function(OTU) OTU/sum(OTU))
+psbact2ft
+
+library(reshape2)
+
+#set color pallet for plotting
+nb.cols <- 20
+mycolors <- colorRampPalette(brewer.pal(20, "PiYG"))(nb.cols)
+
+# Plots the average taxa abundance per time point per study arm - Dr. Michelle Asbury amazing code!!!
+
+BarPlotbySubject <- function(dataset, taxalevel, IDvar, time, x, legendName, colourPalette) {
+  GlomDataSet       <- tax_glom(dataset, taxrank = taxalevel)
+  Percent           <- transform_sample_counts(GlomDataSet, function(x) 100 * x/sum(x))
+  NewDataSet        <- psmelt(Percent)
+  VariablesToSubset <- c(IDvar, time, taxalevel, "Abundance")
+  SubsetData        <- NewDataSet[VariablesToSubset]
+  colnames(SubsetData)[colnames(SubsetData) == IDvar] <- "SubjectID"
+  
+  MeltedData        <- melt(SubsetData, id=c("SubjectID", time, taxalevel))
+  CastedData        <- aggregate(value ~ SubjectID+MeltedData[[time]]+MeltedData[[taxalevel]], data=MeltedData, FUN="mean")
+  colnames(CastedData)[colnames(CastedData) == "MeltedData[[taxalevel]]"] <- "Taxa"
+  colnames(CastedData)[colnames(CastedData) == "MeltedData[[time]]"]      <- "Time"
+  
+  CastedData$Concat <- paste(CastedData$SubjectID, CastedData$Time)
+  IDTimeCombos   <- unique(CastedData$Concat) 
+  
+  if (missing(x)){
+    
+    for (i in IDTimeCombos) {
+      Combo       <- CastedData$Concat == i
+      SubID       <- unique(CastedData$SubjectID[Combo])
+      TimeInt     <- unique(CastedData$Time[Combo])
+      Subset      <- CastedData[Combo, ]
+      Remaining   <- 100 - sum(Subset$value, na.rm = TRUE)
+      NewRow      <- data.frame(SubjectID = SubID,
+                                Time = TimeInt,
+                                Taxa = "Unclassified",
+                                value = Remaining,
+                                Concat = i)
+      if (Remaining != 0) {
+        CastedData <- rbind(CastedData, NewRow)
+      }
+    }
+    
+    if (missing(legendName)){
+      legendName <- sprintf("%s", taxalevel)
+    }
+    
+    ggplot(CastedData, aes(x=Time, y=value, fill=Taxa))+
+      geom_bar(stat="identity")+
+      facet_wrap(~SubjectID, ncol=5, nrow=6)+
+      labs(fill=legendName)
+  } 
+  
+  else {
+    OTUNames    <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+    TaxaNames   <- as.character(tax_table(Percent)[OTUNames, taxalevel])
+    
+    for (i in TaxaNames) {
+      CastedData$Taxa2  <- ifelse(CastedData$Taxa == i, i, 
+                                  ifelse(CastedData$Taxa2 != "", CastedData$Taxa2, ""))
+      CastedData$value2 <- ifelse(CastedData$Taxa == i, CastedData$value,
+                                  ifelse(CastedData$value2 != "", CastedData$value2, ""))
+    }
+    
+    for (i in IDTimeCombos) {
+      Combo       <- CastedData$Concat == i
+      SubID       <- unique(CastedData$SubjectID[Combo])
+      TimeInt     <- unique(CastedData$Time[Combo])
+      Subset      <- CastedData[Combo, ]
+      Remaining   <- 100 - sum(Subset$value2, na.rm = TRUE)
+      NewRow      <- data.frame(SubjectID = SubID,
+                                Time = TimeInt,
+                                Taxa = "",
+                                value = "",
+                                Concat = i,
+                                Taxa2 = "\U03BCOther",
+                                value2 = Remaining)
+      if (Remaining != 0) {
+        CastedData <- rbind(CastedData, NewRow)
+      }
+    }
+    
+    if (missing(legendName)){
+      legendName <- sprintf("Top %s %s", x, taxalevel)
+    }
+    
+    # Hack: \U03BC enters a mu to put "Other" in the bottom of legend list
+    TaxaOrder <- sort(unique(CastedData$Taxa2))
+    TaxaOrder <- TaxaOrder[TaxaOrder != "\U03BCOther"]
+    
+    ggplot(CastedData, aes(x=Concat, y=value2, fill=Taxa2))+
+      geom_bar(stat="identity", position="stack")+
+      scale_fill_hue(labels=c(TaxaOrder, "Other"))+
+      theme_bw()+
+      theme(panel.grid.minor = element_blank(),
+            strip.text.x = element_blank(),
+            panel.grid.major = element_blank(),
+            panel.border = element_rect(color = "grey50", size=1))+
+      ylab("Relative Abundance (%)")+
+      labs(fill=legendName)+
+      guides(fill=guide_legend(ncol=1))+
+      #scale_y_continuous(breaks=seq(0,100,100))+
+      theme(axis.text.x = element_text(size=8, angle = 90, face="bold", vjust=0),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            axis.ticks.x=element_blank(),
+            axis.title.y = element_text(size=10),
+            axis.text.y = element_text(size=10),
+            axis.title.x = element_blank(),
+            panel.spacing = unit(2, "lines")) +
+      #theme(legend.position="bottom", legend.direction="horizontal", legend.justification=c(0,0))+
+      #guides(fill=guide_legend(nrow=2))
+    #guides(fill=guide_legend(ncol=2))
+      scale_fill_manual(values=colourPalette)
+      
+  }
+}
+
+BarPlotbySubject(psbact2ft, "Genus", "Study_Arm", "Time_point", 20, "Genus", c(mycolors, "darkgray"))
+
+# Plots the taxa abundance per individual per time point per study arm - credit again for Dr. Asbury
+# focus on Bifidobacterium 
+
+RABarPlot_byGroupB <- function(dataset, taxalevel, facetVar1, facetVar2, IDname, x, legendName, colourPalette) { 
+  GlomDataSet       <- tax_glom(dataset, taxrank = taxalevel)
+  Percent           <- GlomDataSet
+  #Percent           <- transform_sample_counts(GlomDataSet, function(x) 100 * x/sum(x))
+  NewDataSet        <- psmelt(Percent)
+  VariablesToSubset <- c(IDname, "Abundance", facetVar1, facetVar2, taxalevel) 
+  SubsetData        <- NewDataSet[VariablesToSubset]
+  colnames(SubsetData)[colnames(SubsetData)==taxalevel] <- "Taxa"
+  colnames(SubsetData)[colnames(SubsetData)==IDname] <- "SampleID"
+  colnames(SubsetData)[colnames(SubsetData)==facetVar1] <- "Group1"
+  colnames(SubsetData)[colnames(SubsetData)==facetVar2] <- "Group2"
+  
+  SubsetData$Concat <- paste(SubsetData$Group1, SubsetData$SampleID)
+  
+  #return(View(SubsetData))
+  
+  if (missing(x)){
+    if (missing(legendName)){
+      legendName <- sprintf("%s", taxalevel)
+    }
+    
+  } 
+  
+  else {
+    
+    if (missing(legendName)){
+      legendName <- sprintf("Top %s %s", x, taxalevel)
+    }
+    
+    OTUNames    <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+    TaxaNames   <- as.character(tax_table(Percent)[OTUNames, taxalevel])
+    
+    for (i in TaxaNames) {
+      SubsetData$Taxa2 <- ifelse(SubsetData$Taxa == i, i, 
+                                 ifelse(SubsetData$Taxa2 != "", SubsetData$Taxa2, ""))
+      SubsetData$Abundance2 <- ifelse(SubsetData$Taxa == i, SubsetData$Abundance,
+                                      ifelse(SubsetData$Abundance2 != "", SubsetData$Abundance2, ""))
+    }
+    
+    
+    SampleList  <- unique(SubsetData$Concat)
+    for (sample in SampleList) {
+      Subject   <- SubsetData$Concat == sample
+      Subset    <- SubsetData[Subject, ]
+      group1     <- unique(Subset$Group1)
+      group2     <- unique(Subset$Group2)
+      sampleID  <- unique(Subset$SampleID)
+      Remaining <- 1 - sum(Subset$Abundance2, na.rm = TRUE)
+      concat    <- unique(Subset$Concat)
+      NewRow    <- data.frame(SampleID = sampleID,
+                              Abundance = "",
+                              Group1 = group1,
+                              Group2 = group2,
+                              Concat = sample,
+                              Taxa = "",
+                              Taxa2 = "Other",
+                              #ConcatPercent = "Other",
+                              Abundance2 = Remaining)
+      if (Remaining != 0) {
+        SubsetData <- rbind(SubsetData, NewRow)
+      }
+    }
+    
+    #return(View(SubsetData))
+    
+    #ConcatVector <- sort(as.vector(EmptyDF_ForConcatPercent$ConcatPercent))
+    #ConcatVector <- c(ConcatVector, "Other")
+    
+    TaxaOrder <- sort(unique(SubsetData$Taxa2))
+    TaxaOrder <- TaxaOrder[TaxaOrder != "Other"]
+    
+    NewOrder  <- factor(SubsetData$Taxa2, levels=c(TaxaOrder, "Other"))
+    #TaxaOrder_NoUnderscore <- c(gsub("_", " ", TaxaOrder), "Other")
+    #return(TaxaOrder_NoUnderscore)
+    
+    #Top1Taxa       <- TaxaNames[1]
+    SubsetTop1Taxa  <- SubsetData[SubsetData$Taxa2 == "g__Bifidobacterium", ]
+    OrderofTop1Taxa <- as.vector(na.omit(SubsetTop1Taxa$Concat))
+    ReorderID       <- factor(SubsetData$Concat, levels=c(OrderofTop1Taxa))
+    
+    ggplot(SubsetData, aes(x=ReorderID, y=Abundance2, fill=NewOrder))+
+      facet_wrap(Group2~Group1, scales="free_x", nrow=1)+ 
+      geom_bar(stat="identity", position="stack")+
+      labs(fill=legendName)+
+      #xlab("Participant ID")+
+      ylab("Relative Abundance")+
+      scale_y_continuous(breaks=seq(0,1,0.2))+
+      guides(fill=guide_legend(ncol=1))+
+      theme(axis.text.x = element_text(size=, angle = 90, face="bold", vjust=0),
+            #axis.text.x = element_blank(),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            axis.ticks.x=element_blank(),
+            axis.title.y = element_text(size=10),
+            axis.text.y = element_text(size=10),
+            axis.title.x = element_blank(),
+            #legend.title = element_text(size=22, face="bold"),
+            #legend.text = element_text(size=20),
+            #legend.position = "none",
+            panel.spacing = unit(1, "lines"))+#,
+            #strip.background = element_blank(),
+            #strip.text = element_blank())+
+      scale_fill_manual(values=colourPalette) # labels=TaxaOrder_NoUnderscore
+  }
+}
+
+RABarPlot_byGroupB(psbact2ft, "Genus", "Time_point", "Study_Arm", "Patient_ID", 20, "Genus", c(mycolors, "darkgray") ) 
+
+
+# Relative abundance plots per genera by Time Point and Study Arm for top 10 genera
+#normalize and melt phyloseq object
+ps_bact_genus <- tax_glom(psbact2, taxrank = "Genus")
+ps_bact_genus <- transform_sample_counts(ps_bact_genus, function(OTU) OTU/sum(OTU))
+pmelt_bact_genus <- psmelt(ps_bact_genus)
+sum(pmelt_bact_genus$Abundance)
+
+# Filter genus-level data per genera for individual boxplots of relative abundance 
+pmelt_bifido <- pmelt_bact_genus %>% filter(Genus == "g__Bifidobacterium")
+
+# Plot relative abundance per genera by study Arm
+bifido_fig <- ggplot(pmelt_bifido, aes(x = Time_point, y = Abundance, fill = Time_point, color = Time_point)) + 
+  geom_boxplot(alpha = 1) +
+  geom_jitter(position = position_jitter(0.2),  size = 1.2) + 
+  scale_color_manual(values = c("black", "black"))+
+  scale_fill_manual(values = c("#FF99FF","#990066"))+
+  xlab("Richness Pattern")+
+  ylab("Relative Abundance")+
+  ggtitle("Bifidobacterium spp.")+
+  facet_wrap(~Study_Arm)+
+  scale_y_continuous(labels = scales::percent)+
+  theme_bw()+
+  theme(axis.title = element_text(face = "bold", size = 10),
+        axis.text = element_text(size = 9),
+        strip.text.x = element_text(size = 10,face = "bold"),
+        strip.background = element_rect(color = "white", fill = "white", size = 0.5),
+        plot.title = element_text(hjust = 0.5, face = "bold.italic", size = 10))
+bifido_fig
+
+# Create dataframe with abundance information per time point
+pmelt_bifido_short <- pmelt_bifido %>% filter(Study_Arm == "1_Short_Term")
+pmelt_bifido_long <- pmelt_bifido %>% filter(Study_Arm == "2_Long_Term")
+
+# Perform Shapiro test for normality and Wilcox test per sample time for differences in abundance
+shapiro.test(pmelt_bifido_short$Abundance)
+wilcox.test(pmelt_bifido_short$Abundance, data = pmelt_bifido_short)
+
+shapiro.test(pmelt_bifido_long$Abundance)
+wilcox.test(pmelt_bifido_long$Abundance, data = pmelt_bifido_long)
+
+# Repeat for all top 10 bacteria Staphylococcus, Bifidobacterium, Escherichia, Clostridium, Phocaeicola, Enterococcus, Bacteroides, Streptococcus, Klebsiella & Parabacteroides
+
+## Differential abundance - DESeq (Follow up/Post vs. Day 0/pre)
+## DESeq bact
+# phyloseq to DEseq
+#get ps object no singletons or NA
+diagdds = phyloseq_to_deseq2(psbact2, ~ Time_point)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(psbact2)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqbactresults.csv")
+
+# phyloseq to DEseq
+#get ps object no singletons or NA
+diagdds = phyloseq_to_deseq2(psbact2, ~ Time_point)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(psbact2)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqbactresults.csv")
+
+#plot differentially detected asv (whole dataset)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 22
+#mycolors <- colorRampPalette(brewer.pal(8, "RdYlGn"))(nb.cols)
+mycolors <- colorRampPalette(brewer.pal(8, "PiYG"))(nb.cols)
+#mycolors <- colorRampPalette(brewer.pal(5, "Spectral"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5) + 
+  scale_fill_manual(values = mycolors)+
+  scale_color_manual(values = mycolors)) + 
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq (Bact) - all dataset")
+
+#repeat per study arm
+psbact2short = subset_samples(psbact2, Study_Arm %in% c("1_Short_Term"))
+psbact2long = subset_samples(psbact2, Study_Arm %in% c("2_Long_Term"))
+
+# DESeq short-term bacteria
+diagdds = phyloseq_to_deseq2(psbact2short, ~ Time_point)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(psbact2short)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqbactresultsshort.csv")
+
+#plot differentially detected asv (short)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 21
+mycolors <- colorRampPalette(brewer.pal(4, "PiYG"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + geom_point(size=8) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5)) +
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq (Bact) - Short Term")
+
+# DESeq long-term bacteria
+diagdds = phyloseq_to_deseq2(psbact2long, ~ Time_point)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(psbact2long)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqbactresultslong.csv")
+
+#plot differentially detected asv (long term)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 23
+mycolors <- colorRampPalette(brewer.pal(4, "PiYG"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + geom_point(size=8) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5)) + 
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq (Bact) - Long Term")
+
+
+
+##Relative Abundance fungi
+#relative abundance plots
+antibiofnoNA <- subset_taxa(psITS1k, Order != "NA") # remove unassigned ASVs at order level
+antibiofnoNA
+
+# Inspect taxa distribution in dataset - most abundant fungal genera
+TopTaxa <- function(dataset, taxalevel, x) {
+  TaxaGlom  <- tax_glom(dataset, taxrank = taxalevel, NArm = FALSE)
+  #return(View(tax_table(TaxaGlom)))
+  #Percent   <- TaxaGlom
+  Percent   <- transform_sample_counts(TaxaGlom, function(x) 100 * x/sum(x))
+  #Percent   <- transform_sample_counts(TaxaGlom, log10)
+  #return(otu_table(Percent))
+  
+  #TaxaNames <- names(sort(taxa_sums(TaxaGlom), TRUE)[1:x])
+  TaxaNames <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+  
+  for (taxa in TaxaNames) {
+    phylaName    <- tax_table(Percent)[taxa, taxalevel]
+    phylaPercent <- otu_table(Percent)[taxa, ]
+    phylaVector  <- as.vector(phylaPercent)
+    
+    #phylaName    <- tax_table(TaxaGlom)[taxa, taxalevel]
+    #phylaPercent <- otu_table(TaxaGlom)[taxa, ]
+    #phylaVector  <- as.vector(log10(phylaPercent))
+    #phylaVector  <- phylaVector[!phylaVector %in% "-Inf"]
+    #return(phylaVector)
+    phylaMean    <- round(mean(phylaVector), 1)
+    phylaSD      <- round(sd(phylaVector), 1)
+    lowerCI      <- round(mean(phylaVector) - (1.96 * sd(phylaVector)), 2)
+    upperCI      <- round(mean(phylaVector) + (1.96 * sd(phylaVector)), 2)
+    
+    cat(sprintf("%s: ", phylaName))
+    cat(sprintf("%s ", phylaMean))
+    cat(sprintf("(%s)", phylaSD))
+    #   cat(sprintf("%s)", upperCI))
+    cat("%")
+    cat("\n")
+  }
+}
+
+TopTaxa(antibiofnoNA, "Genus", 20)
+
+#Normalize data
+antibioft <- transform_sample_counts(antibiofnoNA, function(OTU) OTU/sum(OTU))
+antibioft
+
+#set color pallet for plotting
+nb.cols <- 20
+mycolors <- colorRampPalette(brewer.pal(20, "Spectral"))(nb.cols)
+
+# Plots the average taxa abundance per time point per study arm
+
+BarPlotbySubject <- function(dataset, taxalevel, IDvar, time, x, legendName, colourPalette) {
+  GlomDataSet       <- tax_glom(dataset, taxrank = taxalevel)
+  Percent           <- transform_sample_counts(GlomDataSet, function(x) 100 * x/sum(x))
+  NewDataSet        <- psmelt(Percent)
+  VariablesToSubset <- c(IDvar, time, taxalevel, "Abundance")
+  SubsetData        <- NewDataSet[VariablesToSubset]
+  colnames(SubsetData)[colnames(SubsetData) == IDvar] <- "SubjectID"
+  
+  MeltedData        <- melt(SubsetData, id=c("SubjectID", time, taxalevel))
+  CastedData        <- aggregate(value ~ SubjectID+MeltedData[[time]]+MeltedData[[taxalevel]], data=MeltedData, FUN="mean")
+  colnames(CastedData)[colnames(CastedData) == "MeltedData[[taxalevel]]"] <- "Taxa"
+  colnames(CastedData)[colnames(CastedData) == "MeltedData[[time]]"]      <- "Time"
+  
+  CastedData$Concat <- paste(CastedData$SubjectID, CastedData$Time)
+  IDTimeCombos   <- unique(CastedData$Concat) 
+  
+  if (missing(x)){
+    
+    for (i in IDTimeCombos) {
+      Combo       <- CastedData$Concat == i
+      SubID       <- unique(CastedData$SubjectID[Combo])
+      TimeInt     <- unique(CastedData$Time[Combo])
+      Subset      <- CastedData[Combo, ]
+      Remaining   <- 100 - sum(Subset$value, na.rm = TRUE)
+      NewRow      <- data.frame(SubjectID = SubID,
+                                Time = TimeInt,
+                                Taxa = "Unclassified",
+                                value = Remaining,
+                                Concat = i)
+      if (Remaining != 0) {
+        CastedData <- rbind(CastedData, NewRow)
+      }
+    }
+    
+    if (missing(legendName)){
+      legendName <- sprintf("%s", taxalevel)
+    }
+    
+    ggplot(CastedData, aes(x=Time, y=value, fill=Taxa))+
+      geom_bar(stat="identity")+
+      facet_wrap(~SubjectID, ncol=5, nrow=6)+
+      labs(fill=legendName)
+  } 
+  
+  else {
+    OTUNames    <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+    TaxaNames   <- as.character(tax_table(Percent)[OTUNames, taxalevel])
+    
+    for (i in TaxaNames) {
+      CastedData$Taxa2  <- ifelse(CastedData$Taxa == i, i, 
+                                  ifelse(CastedData$Taxa2 != "", CastedData$Taxa2, ""))
+      CastedData$value2 <- ifelse(CastedData$Taxa == i, CastedData$value,
+                                  ifelse(CastedData$value2 != "", CastedData$value2, ""))
+    }
+    
+    for (i in IDTimeCombos) {
+      Combo       <- CastedData$Concat == i
+      SubID       <- unique(CastedData$SubjectID[Combo])
+      TimeInt     <- unique(CastedData$Time[Combo])
+      Subset      <- CastedData[Combo, ]
+      Remaining   <- 100 - sum(Subset$value2, na.rm = TRUE)
+      NewRow      <- data.frame(SubjectID = SubID,
+                                Time = TimeInt,
+                                Taxa = "",
+                                value = "",
+                                Concat = i,
+                                Taxa2 = "\U03BCOther",
+                                value2 = Remaining)
+      if (Remaining != 0) {
+        CastedData <- rbind(CastedData, NewRow)
+      }
+    }
+    
+    if (missing(legendName)){
+      legendName <- sprintf("Top %s %s", x, taxalevel)
+    }
+    
+    # Hack: \U03BC enters a mu to put "Other" in the bottom of legend list
+    TaxaOrder <- sort(unique(CastedData$Taxa2))
+    TaxaOrder <- TaxaOrder[TaxaOrder != "\U03BCOther"]
+    
+    ggplot(CastedData, aes(x=Concat, y=value2, fill=Taxa2))+
+      geom_bar(stat="identity", position="stack")+
+      scale_fill_hue(labels=c(TaxaOrder, "Other"))+
+      theme_bw()+
+      theme(panel.grid.minor = element_blank(),
+            strip.text.x = element_blank(),
+            panel.grid.major = element_blank(),
+            panel.border = element_rect(color = "grey50", size=1))+
+      ylab("Relative Abundance (%)")+
+      labs(fill=legendName)+
+      guides(fill=guide_legend(ncol=1))+
+      #scale_y_continuous(breaks=seq(0,100,10))+ 
+      theme(axis.text.x = element_text(size=8, angle = 90, face="bold", vjust=0),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            axis.ticks.x=element_blank(),
+            axis.title.y = element_text(size=10),
+            axis.text.y = element_text(size=10),
+            axis.title.x = element_blank(),
+            panel.spacing = unit(1, "lines")) +
+      #theme(legend.position="bottom", legend.direction="horizontal", legend.justification=c(0,0))+
+      #guides(fill=guide_legend(nrow=2))
+    #guides(fill=guide_legend(ncol=2))
+      scale_fill_manual(values=colourPalette)
+    
+  }
+}
+
+BarPlotbySubject(antibioft, "Genus", "Study_Arm", "Time_point", 20, "Genus", c(mycolors, "darkgray"))
+
+# Plots the taxa abundance per individual per time point per study arm - Dr. Asbury's code
+# focus on Malassezia 
+
+RABarPlot_byGroupF <- function(dataset, taxalevel, facetVar1, facetVar2, IDname, x, legendName, colourPalette) { 
+  GlomDataSet       <- tax_glom(dataset, taxrank = taxalevel)
+  Percent           <- GlomDataSet
+  #Percent           <- transform_sample_counts(GlomDataSet, function(x) 100 * x/sum(x))
+  NewDataSet        <- psmelt(Percent)
+  VariablesToSubset <- c(IDname, "Abundance", facetVar1, facetVar2, taxalevel) 
+  SubsetData        <- NewDataSet[VariablesToSubset]
+  colnames(SubsetData)[colnames(SubsetData)==taxalevel] <- "Taxa"
+  colnames(SubsetData)[colnames(SubsetData)==IDname] <- "SampleID"
+  colnames(SubsetData)[colnames(SubsetData)==facetVar1] <- "Group1"
+  colnames(SubsetData)[colnames(SubsetData)==facetVar2] <- "Group2"
+  
+  SubsetData$Concat <- paste(SubsetData$Group1, SubsetData$SampleID)
+  
+  #return(View(SubsetData))
+  
+  if (missing(x)){
+    if (missing(legendName)){
+      legendName <- sprintf("%s", taxalevel)
+    }
+    
+  } 
+  
+  else {
+    
+    if (missing(legendName)){
+      legendName <- sprintf("Top %s %s", x, taxalevel)
+    }
+    
+    OTUNames    <- names(sort(taxa_sums(Percent), TRUE)[1:x])
+    TaxaNames   <- as.character(tax_table(Percent)[OTUNames, taxalevel])
+    
+    for (i in TaxaNames) {
+      SubsetData$Taxa2 <- ifelse(SubsetData$Taxa == i, i, 
+                                 ifelse(SubsetData$Taxa2 != "", SubsetData$Taxa2, ""))
+      SubsetData$Abundance2 <- ifelse(SubsetData$Taxa == i, SubsetData$Abundance,
+                                      ifelse(SubsetData$Abundance2 != "", SubsetData$Abundance2, ""))
+    }
+    
+    #return(View(SubsetData))
+    
+    SampleList  <- unique(SubsetData$Concat)
+    for (sample in SampleList) {
+      Subject   <- SubsetData$Concat == sample
+      Subset    <- SubsetData[Subject, ]
+      group1     <- unique(Subset$Group1)
+      group2     <- unique(Subset$Group2)
+      sampleID  <- unique(Subset$SampleID)
+      Remaining <- 1 - sum(Subset$Abundance2, na.rm = TRUE)
+      concat    <- unique(Subset$Concat)
+      NewRow    <- data.frame(SampleID = sampleID,
+                              Abundance = "",
+                              Group1 = group1,
+                              Group2 = group2,
+                              Concat = sample,
+                              Taxa = "",
+                              Taxa2 = "Other",
+                              #ConcatPercent = "Other",
+                              Abundance2 = Remaining)
+      if (Remaining != 0) {
+        SubsetData <- rbind(SubsetData, NewRow)
+      }
+    }
+    
+    #return(View(SubsetData))
+    
+    #ConcatVector <- sort(as.vector(EmptyDF_ForConcatPercent$ConcatPercent))
+    #ConcatVector <- c(ConcatVector, "Other")
+    
+    TaxaOrder <- sort(unique(SubsetData$Taxa2))
+    TaxaOrder <- TaxaOrder[TaxaOrder != "Other"]
+    
+    NewOrder  <- factor(SubsetData$Taxa2, levels=c(TaxaOrder, "Other"))
+    #TaxaOrder_NoUnderscore <- c(gsub("_", " ", TaxaOrder), "Other")
+    #return(TaxaOrder_NoUnderscore)
+    
+    #Top1Taxa        <- TaxaNames[1]
+    SubsetTop1Taxa  <- SubsetData[SubsetData$Taxa2 == "g__Malassezia", ]
+    OrderofTop1Taxa <- as.vector(na.omit(SubsetTop1Taxa$Concat))
+    ReorderID       <- factor(SubsetData$Concat, levels=c(OrderofTop1Taxa))
+    
+    ggplot(SubsetData, aes(x=ReorderID, y=Abundance2, fill=NewOrder))+
+      facet_wrap(Group2~Group1, scales="free_x", nrow=1)+
+      geom_bar(stat="identity")+
+      labs(fill=legendName)+
+      #xlab("Participant ID")+
+      ylab("Relative Abundance (%)")+
+      scale_y_continuous(breaks=seq(0,1,0.2))+
+      guides(fill=guide_legend(ncol=1))+
+      #scale_fill_hue(labels=ConcatVector)+
+      theme(axis.text.x = element_text(size=8, angle = 90, face="bold", vjust=0),
+            #axis.text.x = element_blank(),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            axis.ticks.x=element_blank(),
+            axis.title.y = element_text(size=10),
+            axis.text.y = element_text(size=10),
+            axis.title.x = element_blank(),
+            #legend.title = element_text(size=22, face="bold"),
+            #legend.text = element_text(size=20),
+            #legend.position = "none",
+            panel.spacing = unit(1, "lines"))+#,
+            #strip.background = element_blank(),
+            #strip.text = element_blank())+
+      scale_fill_manual(values=colourPalette) # labels=TaxaOrder_NoUnderscore
+  }
+}
+
+RABarPlot_byGroupF(antibioft, "Genus", "Time_point", "Study_Arm", "Patient_ID", 20, "Genus", c(mycolors, "darkgray"))
+
+# Relative abundance plots per genera by Time Point and Study Arm for top 10 genera
+
+#normalize and melt phyloseq object
+ps_fungi_genus <- tax_glom(antibiofnoNA, taxrank = "Genus")
+ps_fungi_genus <- transform_sample_counts(ps_fungi_genus, function(OTU) OTU/sum(OTU))
+pmelt_fungi_genus <- psmelt(ps_fungi_genus)
+sum(pmelt_fungi_genus$Abundance)
+
+# Filter genus-level data per genera for individual boxplots of relative abundance by Chao1 pattern at 3 and 12 months
+pmelt_malassezia <- pmelt_fungi_genus %>% filter(Genus == "g__Malassezia")
+
+# Plot relative abundance per genera by study Arm
+malassezia_fig <- ggplot(pmelt_malassezia, aes(x = Time_point, y = Abundance, fill = Time_point, color = Time_point)) + 
+  geom_boxplot(alpha = 1) +
+  geom_jitter(position = position_jitter(0.2),  size = 1.2) + 
+  scale_color_manual(values = c("black", "black"))+
+  scale_fill_manual(values = c("#66CCCC","#006666"))+
+  xlab("Richness Pattern")+
+  ylab("Relative Abundance")+
+  ggtitle("Malassezia spp.")+
+  facet_wrap(~Study_Arm)+
+  scale_y_continuous(labels = scales::percent)+
+  theme_bw()+
+  theme(axis.title = element_text(face = "bold", size = 10),
+        axis.text = element_text(size = 9),
+        strip.text.x = element_text(size = 10,face = "bold"),
+        strip.background = element_rect(color = "white", fill = "white", size = 0.5),
+        plot.title = element_text(hjust = 0.5, face = "bold.italic", size = 10))
+malassezia_fig
+
+# Create dataframe with abundance information per genera for top 10 fungal genera by sample time
+pmelt_malassezia_short <- pmelt_malassezia %>% filter(Study_Arm == "1_Short_Term")
+pmelt_malassezia_long <- pmelt_malassezia %>% filter(Study_Arm == "2_Long_Term")
+
+# Perform Shapiro test for normality and Wilcox test per sample time for differences in abundance
+shapiro.test(pmelt_malassezia_short$Abundance)
+wilcox.test(pmelt_malassezia_short$Abundance, data = pmelt_malassezia_short)
+shapiro.test(pmelt_malassezia_long$Abundance)
+wilcox.test(pmelt_malassezia_long$Abundance, data = pmelt_malassezia_long)
+
+# Repeat for all top 10 fungi Cladosporium, Candida, Ganoderma, Mycosphaerella, Saccharomyces, Mycena, Rigidoporus, Hypholoma & Xylodon
+
+## Differential abundance - DESeq (Follow up/Post vs. Day 0/pre)
+
+## DESeq fungi whole dataset
+
+# phyloseq to DEseq
+#get ps object no singletons or NA
+diagdds = phyloseq_to_deseq2(antibiofnoNA, ~ Time_point)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(antibiofnoNA)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqresults.csv")
+
+#plot differentially detected asv (whole dataset)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 2
+mycolors <- colorRampPalette(brewer.pal(5, "Spectral"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5) + 
+  scale_fill_manual(values = mycolors)+
+  scale_color_manual(values = mycolors)) + 
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq - all dataset")
+
+#repeat per study arm
+antibionoNAshort = subset_samples(antibiofnoNA, Study_Arm %in% c("1_Short_Term"))
+antibionoNAlong = subset_samples(antibiofnoNA, Study_Arm %in% c("2_Long_Term"))
+
+
+##DESeq fungi short-term fungi
+diagdds = phyloseq_to_deseq2(antibionoNAshort, ~ Time_point)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(antibionoNAshort)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqresultsshort.csv")
+
+#plot differentially detected asv (short)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 3
+mycolors <- colorRampPalette(brewer.pal(4, "Spectral"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + 
+  geom_point(size=8) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5)) +
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq - Short Term")
+
+##DESeq long-term fungi
+diagdds = phyloseq_to_deseq2(antibionoNAlong, ~ Time_point)
+gm_mean = function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(antibionoNAlong)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+write.csv(sigtab, file = "deseqresultslong.csv")
+
+#plot differentially detected asv (long term)
+theme_set(theme_bw())
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x)) 
+# Species order
+x = tapply(sigtab$log2FoldChange, sigtab$Species, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Species = factor(as.character(sigtab$Species), levels=names(x))
+
+nb.cols <- 4
+mycolors <- colorRampPalette(brewer.pal(4, "Spectral"))(nb.cols)
+
+ggplot(sigtab, aes(x=Species, y=log2FoldChange, color=Genus)) + 
+  geom_point(size=8) + 
+  theme(axis.text.x = element_text(angle = -45, hjust = 0, vjust=0.5)) + 
+  scale_colour_manual(values=mycolors)+
+  scale_fill_manual(values=mycolors) +
+  ggtitle("DESeq - Long Term")
+
+
+
+
+
+
+
+
+
