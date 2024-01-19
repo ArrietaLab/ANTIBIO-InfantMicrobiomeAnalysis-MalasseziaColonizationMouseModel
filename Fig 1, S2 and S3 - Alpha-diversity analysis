@@ -390,5 +390,106 @@ datasetcombined   %>% filter(Study_Arm=="2_Long_Term") %>%ggplot(aes(x=Patient_I
 
 
 
+## Heatmaps
+
+##heatmaps shows the delta change from time point 0 (pre Abx)
+
+ps0 <- psbact2
+ntaxa=1:5 #change to 1:10 if want to show 10 top taxa in graph 
+
+#prepare bacterial data for plotting
+ps0@sam_data$abx_time_group=NA
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==0 & ps0@sam_data$Study_Arm=="1_Short_Term")]="0S"
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==0 & ps0@sam_data$Study_Arm=="2_Long_Term")]="0L"
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==2)]="2-3"
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==3)]="2-3"
+#ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==4)]="3-4"
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==7)]="7-14"
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==9)]="7-14"
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==10)]="7-14"
+
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==11)]="7-14"
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==12)]="7-14"
+ps0@sam_data$abx_time_group[which(ps0@sam_data$Total_days_Abx==14)]="7-14"
+
+#prepare fungal data for plotting
+psf0 <- psITS_clean
+psf0@sam_data$abx_time_group=NA
+
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==0 & psf0@sam_data$Study_Arm=="1_Short_Term")]="0S"
+
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==0 & psf0@sam_data$Study_Arm=="2_Long_Term")]="0L"
 
 
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==2)]="2-3"
+
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==3)]="2-3"
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==4)]="7-14"
+
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==7)]="7-14"
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==9)]="7-14"
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==10)]="7-14"
+
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==11)]="7-14"
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==12)]="7-14"
+psf0@sam_data$abx_time_group[which(psf0@sam_data$Total_days_Abx==14)]="7-14"
+
+#place data in specific cathegories for plotting
+ps0@sam_data$abx_time_group<-factor(ps0@sam_data$abx_time_group,levels = c("0S","2-3","0L","7-14"))
+
+psf0@sam_data$abx_time_group<-factor(psf0@sam_data$abx_time_group,levels = c("0S","2-3","0L", "7-14"))
+
+ps1<-ps0 %>% tax_glom(physeq = .,taxrank = 'Genus')%>% transform_sample_counts(., function(x)
+  x / sum(x)) %>% prune_taxa(names(sort(taxa_sums(.), TRUE))[ntaxa], .)
+psf1<-psf0 %>%tax_glom(physeq = .,taxrank = 'Genus')%>% prune_samples(samples = colSums(.@otu_table) >1) %>% transform_sample_counts(., function(x)x / sum(x)) %>%prune_taxa(names(sort(taxa_sums(.), TRUE))[ntaxa], .)
+
+melted<-psmelt(ps1)
+meltedf<-psmelt(psf1)
+melted$taxa<-melted$Genus
+meltedf$taxa<-meltedf$Genus
+
+meltedL<-melted[which(melted$Type=="2_Long_Term"),]
+meltedS<-melted[which(melted$Type!="2_Long_Term"),]
+
+meltedfL<-meltedf[which(meltedf$Type=="2_Long_Term"),]
+meltedfS<-meltedf[which(meltedf$Type!="2_Long_Term"),]
+
+# plot fungal delta heatmap
+col.pal <- RColorBrewer::brewer.pal(9, "Reds")
+
+my.breaks_rows <- c(seq(-1.5, 1.5, by=0.1))
+my.colors_rows <- c(colorRampPalette(colors = c("#9900CC","black", "#09dbae"))(length(my.breaks_rows)/2))
+
+my.breaks <- c(seq(0, 0.5, by=0.005))
+my.colors <- c(colorRampPalette(colors = c("#9900cc","black", "#09dbae"))(length(my.breaks)/2))
+
+
+meltedf %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`0L`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Fungal:UporDown")
+
+meltedf %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`0L`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Fungal:UporDown")
+meltedf %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`2-3`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Fungal:UporDown")
+
+
+meltedf %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=`2-3`- `0S`,Day7_14= `7-14`-`0L`) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Fungal:Delta")
+
+
+# plot bacteria delta heatmap
+my.breaks_rows <- c(seq(-1.5, 1.5, by=0.1))
+my.colors_rows <- c(colorRampPalette(colors = c("#CC0066","black", "#339900"))(length(my.breaks_rows)/2))
+
+my.breaks <- c(seq(0, 0.5, by=0.005))
+my.colors <- c(colorRampPalette(colors = c("#CC0066","black", "#339900"))(length(my.breaks)/2))
+
+melted %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`0L`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Bacteria:UporDown")
+
+melted %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`0L`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Bacteria:UporDown")
+
+melted %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=sign(`2-3`- `0S`),Day7_14=sign( `7-14`-`2-3`)) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Bacteria:UporDown")
+
+
+melted %>% group_by(taxa,abx_time_group) %>% dplyr::summarise(mabund=mean(Abundance))  %>%  spread(key = abx_time_group,value = mabund) %>% mutate(Day2_3=`2-3`- `0S`,Day7_14= `7-14`-`0L`) %>% dplyr::select(taxa,Day2_3,Day7_14) %>% column_to_rownames("taxa") %>% pheatmap::pheatmap(cluster_cols = F,color = my.colors,main = "Bacteria:Delta")
