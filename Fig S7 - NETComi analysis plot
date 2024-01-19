@@ -1,0 +1,315 @@
+NETComi Analysis plot
+Fig S7
+
+library(phyloseq)
+library(tidyverse)
+library(NetCoMi)
+library(DT)
+
+setwd("~/Desktop/Erik Network Analysis/")
+getwd()
+
+#load bacteria cleaned phyloseq objects
+load('phyloseq_bact_clean')
+psb <- psbact_clean
+
+psb2 = subset_samples(psbact_clean, BactAssigned %in% c("Yes"))
+psb2
+psbfinal = subset_samples(psb2, Over_1000 %in% c("Yes"))
+psbfinal # 93 75
+
+psb <- psbfinal
+psb
+
+taxa_clean_b = as(tax_table(psb), "matrix")
+taxa_clean_b = as.data.frame(taxa_clean_b) # Coerce to dataframe
+#write.csv(taxa_clean, "ITS_taxa_clean_CHILD.csv")
+
+# Extract abundance matrix from the phyloseq object
+asv_clean_b = as(otu_table(psb), "matrix")
+asv_clean_b = as.data.frame(asv_clean_b) # Coerce to dataframe
+#write.csv(asv_clean_df, "ITS_asv_clean_CHILD.csv")
+
+# Extract metadata from the phyloseq object
+metadata_clean_b = as(sample_data(psb), "matrix")
+metadata_clean_b = as.data.frame(metadata_clean_b) 
+
+#load bacteria cleaned phyloseq objects
+load('phyloseq_ITS_clean')
+psf <- psITS_clean
+
+psf2 = subset_samples(psf, Over_1000 %in% c("Yes"))
+psffinal = subset_samples(psf2, BactAssigned %in% c("Yes"))
+psffinal # 1019 83
+
+psffinal <- subset_taxa(psffinal, Phylum != "NA")
+psffinal # 901 75
+
+psf <- psffinal
+psf
+
+taxa_clean_f = as(tax_table(psf), "matrix")
+taxa_clean_f = as.data.frame(taxa_clean_f) # Coerce to dataframe
+#write.csv(taxa_clean, "ITS_taxa_clean_CHILD.csv")
+
+# Extract abundance matrix from the phyloseq object
+asv_clean_f = as(otu_table(psf), "matrix")
+asv_clean_f = as.data.frame(asv_clean_f) # Coerce to dataframe
+#write.csv(asv_clean_df, "ITS_asv_clean_CHILD.csv")
+
+# Extract metadata from the phyloseq object
+metadata_clean_f = as(sample_data(psf), "matrix")
+metadata_clean_f = as.data.frame(metadata_clean_f)
+
+#read metadata file
+metadata <- read.table("ANTIBIO_metadata_seqinfo.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+
+row.names(metadata) <- as.character(metadata$Manifest)
+metadata$Manifest <- NULL
+dim(metadata) # 94 114
+
+#trim metadata to reflect same removals
+metadata2 = subset(metadata, BactAssigned %in% c("Yes"))
+metadata2
+
+metadatafinal = subset(metadata2, Over_1000 %in% c("Yes"))
+metadatafinal # 75 114
+
+psb@tax_table@.Data<-cbind(psb@tax_table[,2],psb@tax_table)
+psb@tax_table[,1]<-"k__Bacteria"
+colnames(psb@tax_table)[1]<-"Kingdom"
+#rownames(psb@tax_table@.Data)<-gsub(pattern = "s__",replacement = "",x = psb@tax_table[,"Species"]) %>% abbreviate(minlength = 5)
+#rownames(psb@otu_table@.Data) <- rownames(psb@tax_table@.Data)
+ # psb<-psb %>% prune_taxa(names(sort(taxa_sums(.), TRUE))[1:100], .)
+
+rownames(psb@otu_table)<- paste0("B_",seq(1:nrow(psb@otu_table)))
+rownames(psb@tax_table)<- paste0("B_",seq(1:nrow(psb@otu_table)))
+
+rownames(psf@otu_table)<- paste0("F_",seq(1:nrow(psf@otu_table)))
+rownames(psf@tax_table)<- paste0("F_",seq(1:nrow(psf@otu_table)))
+
+min_sum = 200 # minimum reads per taxa
+                                 
+psb <- prune_taxa(taxa_sums(psb) > min_sum, psb)
+psb
+  
+psb <- psb %>% transform_sample_counts(., function(x) 100*(x / sum(x)))
+
+#rownames(psf@tax_table@.Data)<-gsub(pattern = "s__",replacement = "*",x = psf@tax_table[,"Species"]) %>% abbreviate(minlength = 5)
+
+#rownames(psf@otu_table@.Data) <- rownames(psf@tax_table@.Data)
+psf <- prune_taxa(taxa_sums(psf) > min_sum, psf)
+psf
+
+psf<-psf %>% transform_sample_counts(., function(x) 100*(x / sum(x)))
+
+psb<-prune_samples(samples =intersect(colnames(psf@otu_table),colnames(psb@otu_table)),x = psb)
+psf<-prune_samples(samples =intersect(colnames(psf@otu_table),colnames(psb@otu_table)),x = psf)
+
+merged0 <- merge_phyloseq(psf,psb)
+#merged0 <- tax_glom(physeq = merged0, taxrank = "Species")
+
+metadata_clean_merge = as(sample_data(merged0), "matrix")
+metadata_clean_merge = as.data.frame(metadata_clean_merge) 
+
+taxa_clean_m = as(tax_table(merged0), "matrix")
+taxa_clean_m = as.data.frame(taxa_clean_m) # Coerce to dataframe
+taxa_clean_m$Malassezia <- ifelse(taxa_clean_m$Genus == "g__Malassezia", "*", "")
+
+asv_clean_m = as(otu_table(merged0), "matrix")
+asv_clean_m = as.data.frame(asv_clean_m) 
+
+merged0 <- phyloseq(otu_table(asv_clean_m, taxa_are_rows = TRUE),
+               sample_data(metadata_clean_merge),
+               tax_table(as.matrix(taxa_clean_m)))
+merged0
+
+merged_st <- prune_samples(samples = (psb@sam_data$Study_Arm == "1_Short_Term"), x = merged0)
+merged_st
+
+merged_lt <- prune_samples(samples = (psb@sam_data$Study_Arm == "2_Long_Term"), x = merged0)
+merged_lt
+
+typical = subset_samples(merged0,  Time_point=="Day_0")
+typical<-prune_taxa(taxa = rowSums(typical@otu_table) >0,x=typical)
+atypical = subset_samples(merged0, Time_point=="Follow_Up")
+atypical<-prune_taxa(taxa = rowSums(atypical@otu_table) >0,x=atypical)
+
+kingdom <- as.factor(merged0@tax_table@.Data[, 1])
+names(kingdom) <-c(rownames(merged0@otu_table))
+#phyla<-phyla[!duplicated(names(phyla))]
+kingcol <- kingcol <- c( "#FF99FF","#66CCCC")
+kingcol <- kingcol <- c( "#990066","#006666")
+
+groups=c("Day_0", "Follow_Up")
+
+#Bacteria - short-term = "#FF99FF"
+#Fungi - short-term = "#66CCCC"
+
+#Bacteria - long-term = "#990066"
+#Fungi - long-term = "#006666"
+
+malassezia <- as.vector(merged0@tax_table@.Data[, 8])
+names(malassezia) <-c(rownames(merged0@otu_table))
+
+Data table function.
+datatable2<-function(res,...)
+{
+  return(datatable(res,options=list(pageLength = 10,dom = 'lBfrtip',
+                                    buttons = c('copy', 'csv', 'excel', 'print'),
+                                    initComplete = JS(
+                                      "function(settings, json) {",
+                                      "$(this.api().table().header()).css({'background-color': '#595757', 'color': '#fff'});",
+                                      "}")),extensions = 'Buttons',...
+  ))
+  
+}
+
+#Network plotting
+
+net_cor <- netConstruct(data = typical, data2 = atypical,
+                       measure = "pearson",
+                       normMethod = "VST",
+                       zeroMethod = "pseudo",
+                       sparsMethod = "threshold",
+                       #filtTax = "numbSamp",
+                       #filtTaxPar = list(numbSamp = 5),
+                       verbose = 3,
+                       thresh = 0.5,
+                       seed = 1234523432)
+
+# net_cor <- netConstruct(data = typical,data2 = atypical,
+#                        measure = "pearson",
+#                        normMethod = "clr", 
+#                        zeroMethod = "multRepl",
+#                        sparsMethod = "threshold",
+#                        verbose = 3,
+#                        thresh = 0.3,
+#                        seed = 1234523432)
+
+netana_cor <- netAnalyze(net_cor, 
+                        clustMethod = "cluster_fast_greedy",
+                         #centrLCC = TRUE,
+                         #weightDeg = TRUE,
+                         #hubPar = "betweenness",
+                         #normDeg = FALSE
+                         gcmHeat = F,
+                         gcmHeatLCC = F)
+
+
+### **************************************************
+#### Change permTest to False if you are testing things and also change cores to your laptop
+comp_season <- netCompare(netana_cor, permTest = F, nPerm = 5000, verbose = FALSE)
+
+#jpeg(file = "~/Desktop/Erik Network Analysis/0.5 Pearson.jpeg", width = 4000, height = 2000, units = "px", res = 300)
+plot(netana_cor, 
+     nodeSize="degree", 
+     nodeTransp = 30,
+     sameLayout = T,
+     layout = "spring",
+     repulsion = 0.85,
+     shortenLabels = "none",
+     labels = malassezia,
+     labelScale = T,
+     rmSingles =  "inboth",
+     negDiffCol = T,
+     posCol = "darkgreen",
+     negCol = "red",
+     cexNodes = 1,
+     cexLabels = 2.5,
+     cexTitle = 2,
+     hubBorderCol = "black",
+     highlightHubs = TRUE,
+     borderWidth = 1,
+     hubBorderWidth = 2,
+     nodeColor = "feature",
+     # edgeTranspLow = 0,
+     # edgeTranspHigh = 40,
+     featVecCol = kingdom,
+     colorVec =  kingcol,
+     featVecShape = kingdom,
+     nodeShape=c("circle","triangle"),
+     edgeWidth = 0.3,
+     groupNames = c("Day 0", "Follow Up"), 
+     showTitle = TRUE)
+
+# Colors used in the legend should be equally transparent as in the plot
+kingcol_transp <- colToTransp(kingcol, 30)
+
+legend(-1.15, 1.1, cex = 2, pt.cex = 2, 
+       legend=levels(kingdom), col = kingcol_transp, bty = "n", pch = c(16,17)) 
+
+legend(0.9, 1.1, cex = 2, title = "Estimated Correlation:",
+       legend = c("+","-"), lty = 1, lwd = 3, 
+       col = c("darkgreen","red"), 
+       bty = "n", horiz = TRUE)
+#dev.off()
+
+# p<-plot(netana_cor, 
+#      sameLayout = F, 
+#      layout = "spring",
+#      repulsion = 0.9,
+#      #layoutGroup = "union",
+#      rmSingles = "inboth", 
+#      nodeSize = "degree", 
+#      labelScale = FALSE,
+#      cexNodes = 1, 
+#      cexLabels = 0.5,
+#      cexHubLabels = 0.5,
+#      cexTitle = 0.5,
+#       posCol = "darkturquoise",
+#      negCol = "orange",
+#      groupNames = groups,
+#      hubBorderCol  = "gray40")
+
+summary(comp_season, 
+        groupNames = groups,
+        showCentr = c("degree", "between", "closeness"), 
+        numbNodes = 5)
+
+species_names1<-typical@tax_table[,7] %>%data.frame() %>% rownames_to_column("microbe1")%>% rename(species1=Species)
+species_names2<-typical@tax_table[,7] %>%data.frame() %>% rownames_to_column("microbe2")%>% rename(species2=Species)
+
+assoc_mat<-bind_cols(netana_cor$input$assoMat1 %>% data.frame() %>% rownames_to_column("row") %>% gather(key=name,value=association_network1,-row),netana_cor$input$assoMat2 %>% data.frame() %>% rownames_to_column("row") %>% gather(key=name,value=association_network2,-row)) %>% rename(microbe1=row...1,microbe2=name...2) %>% select(microbe1,microbe2,association_network1,association_network2)
+
+assoc_mat<-left_join(assoc_mat,species_names1,by="microbe1") %>% left_join(.,species_names2,by="microbe2")
+
+datatable2(assoc_mat %>%select(microbe1,species1,microbe2,species2,association_network1,association_network2)%>% filter(microbe1!=microbe2))
+#p
+
+#legend("bottom", title = "estimated association:", legend = c("+","-"), 
+#       col = c("#009900","red"), inset = 0.02, cex = 0.5, lty = 1, lwd = 4, 
+#       bty = "n", horiz = TRUE)
+
+
+diff_season <- diffnet(net_cor,
+                       diffMethod = "fisherTest",
+                       adjust = "lfdr",
+                       seed = 12437)
+
+p<-plot(diff_season,
+    layout = "spring",
+     repulsion = 0.9,
+     cexNodes = 1, 
+     cexLegend = 2,
+     #edgeCol=c("#db2335", "#882E72","#efcb4a","#080068"),
+     cexTitle = 2,
+     #mar = c(2,2,8,5),
+     legendGroupnames = groups,
+     labels = malassezia,
+     cexLabels = 2,
+     legendPos = "topright")
+
+diff_assoc_mat<-bind_cols(diff_season$assoMat1 %>% data.frame() %>% rownames_to_column("row") %>% gather(key=name,value=association_network1,-row),diff_season$assoMat2 %>% data.frame() %>% rownames_to_column("row") %>% gather(key=name,value=association_network2,-row)) %>% rename(microbe1=row...1,microbe2=name...2) %>% select(microbe1,microbe2,association_network1,association_network2)
+
+diff_mat<-bind_cols(diff_season$diffAdjustMat %>% data.frame() %>% rownames_to_column("row") %>%gather(key=name,value=diff_adjustMat,-row),diff_season$pAdjustMat %>% data.frame() %>% rownames_to_column("row") %>%gather(key=name,value=p_value,-row)) %>% rename(microbe1=row...1,microbe2=name...2) %>% select(microbe1,microbe2,diff_adjustMat,p_value)
+
+diff_all<-bind_cols(diff_assoc_mat,diff_mat) %>% rename(microbe1=microbe1...1,microbe2=microbe2...2) %>% select(microbe1,microbe2,association_network1,association_network2,p_value)
+
+diff_all<-left_join(diff_all,species_names1,by="microbe1") %>% left_join(.,species_names2,by="microbe2")
+
+DT::datatable(diff_all   %>% filter(p_value < 0.05) %>% select(microbe1,species1,microbe2,species2,association_network1, association_network2,p_value) %>% filter(microbe1!=microbe2))
+
+
+
+
