@@ -1,5 +1,5 @@
 ## Relative abundance plots
-# Figs 1G, S2, S3
+# Figs 1G, S2, S3, S4
 
 #install required packages
 library(phyloseq)
