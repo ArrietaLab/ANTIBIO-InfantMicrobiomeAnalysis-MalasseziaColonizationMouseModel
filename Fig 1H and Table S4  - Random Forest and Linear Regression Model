@@ -1,5 +1,5 @@
 ##Random Forest and Logistic Mixed Regression models
-# Fig 1 and S8 
+# Fig 1H and Table S4 
 
 #Load packages
 library(phyloseq)
