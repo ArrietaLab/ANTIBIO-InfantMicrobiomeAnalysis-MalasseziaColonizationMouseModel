@@ -1,5 +1,5 @@
 ## Beta-diversity analysis
-# Fig S2 and Table S2
+# Fig 1e-f and Table S2
 
 #install packages
 library(tidyverse)
