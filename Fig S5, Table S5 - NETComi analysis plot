@@ -1,5 +1,5 @@
 NETComi Analysis plot
-Fig S7
+Fig S5, Table S5
 
 library(phyloseq)
 library(tidyverse)
