@@ -1,5 +1,5 @@
 ## Alpha-diversity analysis
-# Figs 1, S1, S2, and S3
+# Figs 1B-C, S1C-D
 
 #install required packages
 library(phyloseq)
