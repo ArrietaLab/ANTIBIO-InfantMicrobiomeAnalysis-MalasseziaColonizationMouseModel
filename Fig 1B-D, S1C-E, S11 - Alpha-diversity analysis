@@ -1,5 +1,5 @@
 ## Alpha-diversity analysis
-# Figs 1B-D, S1C-E
+# Figs 1B-D, S1C-E, S11
 
 #install required packages
 library(phyloseq)
@@ -192,11 +192,44 @@ metadatabact %>% ggplot(aes(x=reorder(Patient_ID,-ObservedNorm),y=ObservedNorm,c
   xlab("Patient_ID") + facet_wrap(~Study_Arm)
 
 
+#check fungi sequencing depth
+
+#find diversity measurements for whole dataset - no filtering
+adivrar<-estimate_richness(psITS_clean,measures=c("Observed","Shannon","Chao1"))
+adivrar
+
+#add diversity measurements to metadata
+metadata$alphadiv<-adivrar$Shannon
+metadata$chao1<-adivrar$Chao1
+metadata$observed<-adivrar$Observed
+metadata$evenness<-adivrar$Shannon/log(adivrar$Observed)
+
+#plot rarefication curves
+p1 <- ggplot(data = metadata, aes(x=ITSnochim, y=observed)) + geom_point(); p1
+#zoom
+p2 <- ggplot(data = metadata, aes(x=ITSnochim, y=observed)) + geom_point() + scale_x_log10() + facet_wrap("Time_point"); p2
+
+#Use ggrare() from the ranacapa package
+# Install if needed
+library(devtools)
+devtools::install_github("gauravsk/ranacapa")
+install.packages("ranacapa")
+
+# Load packages
+library(ranacapa)
+
+# Suppose your phyloseq object is called 'ps'
+p.rar <- ggrare(psITS_clean, step = 100, color = "Patient_ID", label = NULL, se = TRUE); p.rar
+
+p.rar2 <- ggrare(psITS_clean, step = 100, color = "Patient_ID", label = NULL, se = TRUE) + coord_cartesian(xlim=c(0, 5000)); p.rar2
+
+
 
 ##FUNGI
 #subset ps object over 1k sequences (no chim per sample)
 psITS1k = subset_samples(psITS_clean, Over_1000 %in% c("Yes"))
 psITS1k
+
 
 #subset metadata
 dataset1k = subset(metadata, Over_1000 %in% c("Yes"))
